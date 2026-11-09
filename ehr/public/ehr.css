@@ -287,3 +287,6 @@ input[type="date"], input[type="time"], input[type="datetime-local"] {
 input[type="date"]::-webkit-date-and-time-value, input[type="time"]::-webkit-date-and-time-value,
 input[type="datetime-local"]::-webkit-date-and-time-value { text-align: left; margin: 0; }
 label, fieldset, .form-grid > * { min-width: 0; }
+.obj-item label.check { align-items: flex-start; }
+.obj-item label.check input { margin-top: .2rem; }
+fieldset .form-grid > label.check { align-self: end; min-height: 2.5rem; }

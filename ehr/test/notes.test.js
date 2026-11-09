@@ -9,6 +9,9 @@ let t, pid;
 before(async () => {
   t = await start();
   pid = t.ctx.patients[0];
+  // Keep these note-flow tests independent of seeded treatment plans (the golden-thread sign rule
+  // is covered in golden-thread.test.js).
+  t.db.prepare("UPDATE treatment_plans SET status = 'completed' WHERE patient_id = ? AND status = 'active'").run(pid);
 });
 after(async () => { await t.stop(); });
 

@@ -10,7 +10,7 @@ const { can } = require("../permissions");
 const { audit } = require("../audit");
 const { tx } = require("../db");
 const {
-  html, page, chartPage, notFound, csrfField, select, badge, getPatient, patientName,
+  html, raw, page, chartPage, notFound, csrfField, select, badge, getPatient, patientName,
   today, fmtDate, fmtTime, fmtTimestamp, humanize,
 } = require("../views");
 
@@ -37,14 +37,47 @@ const RISK = { kind: "risk", key: "risk" };
 const MSE_F = { kind: "mse", key: "mse" };
 const sel = (key, label, options, required = false, hint = "") => ({ kind: "select", key, label, options, required, hint });
 const dt = (key, label, required = false, hint = "") => ({ kind: "date", key, label, required, hint });
-/** A 0-4 risk rating plus narrative (used for ASAM dimensions). */
-const rated = (key, label, hint = "") => ({ kind: "rated", key, label, required: true, hint });
+/**
+ * A 0-4 risk rating plus narrative (used for ASAM dimensions). `labels` maps ASAM edition -> label;
+ * `driver` adds a "dimensional driver of level of care" checkbox.
+ */
+const rated = (key, labels, { driver = false, hint = "" } = {}) =>
+  ({ kind: "rated", key, labels, label: labels["3"], required: true, driver, hint });
 const ASAM_RATINGS = [
   { value: "", label: "Select…" }, { value: "0", label: "0: No risk / stable" }, { value: "1", label: "1: Mild" },
   { value: "2", label: "2: Moderate" }, { value: "3", label: "3: Significant" }, { value: "4", label: "4: Severe / imminent" },
 ];
-const ASAM_LEVELS = [
-  { value: "", label: "Select…" },
+const ASAM_EDITIONS = [{ value: "4", label: "4th edition (2023)" }, { value: "3", label: "3rd edition (2013)" }];
+/** Notes saved before the edition field existed were written against the 3rd edition. */
+const asamEdition = (c) => (c && c.asam_edition === "4" ? "4" : "3");
+/**
+ * Level-of-care options. `editions` limits where a level is selectable. Names are generic; verify them
+ * against the licensed ASAM Criteria text. "2.5_php" keeps the 3rd-edition partial hospitalization level
+ * distinct from the 4th-edition 2.5 (high-intensity outpatient).
+ */
+const ASAM_LEVEL_OPTIONS = [
+  { value: "0.5", label: "0.5 Early intervention", editions: ["3", "4"] },
+  { value: "1.0", label: "1.0 Long-term remission monitoring", editions: ["4"] },
+  { value: "1", label: "1 Outpatient services (3rd edition)", editions: ["3"] },
+  { value: "1.5", label: "1.5 Outpatient therapy", editions: ["4"] },
+  { value: "1.7", label: "1.7 Medically managed outpatient", editions: ["4"] },
+  { value: "2.1", label: "2.1 Intensive outpatient (IOP)", editions: ["3", "4"] },
+  { value: "2.5", label: "2.5 High-intensity outpatient", editions: ["4"] },
+  { value: "2.5_php", label: "2.5 Partial hospitalization (3rd edition)", editions: ["3"] },
+  { value: "2.7", label: "2.7 Medically managed intensive outpatient", editions: ["4"] },
+  { value: "3.1", label: "3.1 Clinically managed low-intensity residential", editions: ["3", "4"] },
+  { value: "3.3", label: "3.3 Clinically managed population-specific high-intensity residential (3rd edition)", editions: ["3"] },
+  { value: "3.5", label: "3.5 Clinically managed high-intensity residential", editions: ["3", "4"] },
+  { value: "3.7", label: "3.7 Medically managed residential", editions: ["3", "4"] },
+  { value: "4", label: "4 Medically managed intensive inpatient", editions: ["3", "4"] },
+];
+const ASAM_LEVEL_HINT = "Level names are generic; verify them against your licensed copy of The ASAM Criteria.";
+/** Edition-aware level-of-care select. */
+const level = (key, label, required = false, hint = "") => ({ kind: "asam_level", key, label, required, hint });
+/** Fields from earlier template versions: never on the form, shown on the read view when a note has them. */
+const legacy = (key, label, options = null) => ({ kind: "legacy", key, label, options });
+/** 3rd-edition-era single "recommended level" (notes written before indicated/adjusted levels). */
+const LEGACY_ASAM_LEVELS = [
   { value: "0.5", label: "0.5 Early intervention" },
   { value: "1", label: "1 Outpatient services" },
   { value: "2.1", label: "2.1 Intensive outpatient (IOP)" },
@@ -135,16 +168,25 @@ const TYPES = {
     label: "ASAM level of care assessment",
     formats: {
       asam: [
+        { kind: "edition", key: "asam_edition", label: "ASAM Criteria edition" },
         ta("substance_history", "Substance use history", true, "Substances, route, frequency, amount, last use, prior treatment."),
-        rated("dim1", "Dimension 1: Acute intoxication and/or withdrawal potential"),
-        rated("dim2", "Dimension 2: Biomedical conditions and complications"),
-        rated("dim3", "Dimension 3: Emotional, behavioral or cognitive conditions"),
-        rated("dim4", "Dimension 4: Readiness to change"),
-        rated("dim5", "Dimension 5: Relapse, continued use or continued problem potential"),
-        rated("dim6", "Dimension 6: Recovery / living environment"),
-        sel("recommended_level", "Recommended level of care", ASAM_LEVELS, true),
-        ta("level_justification", "Justification", true, "How the dimensional ratings support the recommended level."),
-        tx1("actual_level", "Level of care client will receive (if different)", false, "And the reason, e.g. availability or client preference."),
+        rated("dim1", { 4: "Dimension 1: Intoxication, Withdrawal & Addiction Medications",
+          3: "Dimension 1: Acute intoxication and/or withdrawal potential" }, { driver: true }),
+        rated("dim2", { 4: "Dimension 2: Biomedical Conditions", 3: "Dimension 2: Biomedical conditions and complications" }, { driver: true }),
+        rated("dim3", { 4: "Dimension 3: Psychiatric & Cognitive Conditions",
+          3: "Dimension 3: Emotional, behavioral or cognitive conditions" }, { driver: true }),
+        rated("dim4", { 4: "Dimension 4: Substance Use-Related Risks", 3: "Dimension 4: Readiness to change" }, { driver: true }),
+        rated("dim5", { 4: "Dimension 5: Recovery Environment Interactions",
+          3: "Dimension 5: Relapse, continued use or continued problem potential" }, { driver: true }),
+        rated("dim6", { 4: "Dimension 6: Person-Centered Considerations", 3: "Dimension 6: Recovery / living environment" }, { driver: true }),
+        level("indicated_level", "Indicated level of care", true, "The level the dimensional assessment points to."),
+        level("adjusted_level", "Adjusted level of care (after Person-Centered Considerations / shared decision-making)", false,
+          "Leave blank if the same as the indicated level."),
+        ta("level_difference_reason", "Reason indicated and adjusted levels differ", false,
+          "Required to sign when the levels differ, e.g. client preference, availability, payer, safety."),
+        ta("level_justification", "Justification", true, "How the dimensional ratings and drivers support the indicated level."),
+        legacy("recommended_level", "Recommended level of care", LEGACY_ASAM_LEVELS),
+        legacy("actual_level", "Level of care client will receive (if different)"),
         RISK],
     },
   },
@@ -237,13 +279,102 @@ function loadAppointment(req, patientId, raw) {
   return appt ? { appt, error: null } : { appt: null, error: "That appointment doesn't belong to this patient." };
 }
 
+/* ------------------------------------------------------------------ */
+/* Golden thread: treatment plan objectives addressed by a note       */
+/* ------------------------------------------------------------------ */
+const PLAN_LINKED_TYPES = ["progress", "group", "psychiatry"];
+const OBJ_PROGRESS = [
+  { value: "progressing", label: "Progressing" }, { value: "no_change", label: "No change" },
+  { value: "regressed", label: "Regressed" }, { value: "met", label: "Met" },
+];
+const MAX_OBJ_COMMENT = 500;
+const NO_PLAN_MSG = "No active treatment plan. Payers expect a plan before ongoing therapy.";
+const OBJ_SIGN_MSG = "Select at least one treatment plan objective addressed in this session.";
+
+/** The patient's active plan(s) and their objectives, ordered problem > goal > objective. */
+function activePlan(db, patientId) {
+  const plans = db.prepare("SELECT id FROM treatment_plans WHERE patient_id = ? AND status = 'active' ORDER BY id").all(patientId);
+  if (!plans.length) return { hasPlan: false, objectives: [] };
+  const objectives = db.prepare(
+    `SELECT o.id, o.text, o.status, o.target_date, g.goal_text, pr.title AS problem_title
+     FROM treatment_plans tp
+     JOIN plan_problems pr ON pr.plan_id = tp.id
+     JOIN plan_goals g ON g.problem_id = pr.id
+     JOIN plan_objectives o ON o.goal_id = g.id
+     WHERE tp.patient_id = ? AND tp.status = 'active' AND o.status <> 'discontinued'
+     ORDER BY tp.id, pr.sort, pr.id, g.sort, g.id, o.sort, o.id`).all(patientId);
+  return { hasPlan: true, objectives };
+}
+
+/** Objectives linked to a note (whatever plan they belong to now), for display. */
+function noteObjectives(db, noteId) {
+  return db.prepare(
+    `SELECT no.objective_id, no.progress, no.comment, o.text, o.status, o.target_date, g.goal_text, pr.title AS problem_title
+     FROM note_objectives no
+     JOIN plan_objectives o ON o.id = no.objective_id
+     JOIN plan_goals g ON g.id = o.goal_id
+     JOIN plan_problems pr ON pr.id = g.problem_id
+     WHERE no.note_id = ? ORDER BY pr.sort, pr.id, g.sort, g.id, o.sort, o.id`).all(noteId);
+}
+
+/** Stored links as the form's value map { [objectiveId]: { progress, comment } }. */
+function objectiveValues(db, noteId) {
+  const out = {};
+  for (const r of db.prepare("SELECT objective_id, progress, comment FROM note_objectives WHERE note_id = ?").all(noteId)) {
+    out[r.objective_id] = { progress: r.progress || "", comment: r.comment || "" };
+  }
+  return out;
+}
+
+/**
+ * Read "objective addressed" selections (obj_<id>_addressed / _progress / _comment) and validate them
+ * against the patient's active plan. Returns { selected: { [id]: {progress, comment} }, error }.
+ */
+function readObjectives(db, body, patientId) {
+  const selected = {};
+  let error = null;
+  const allowed = new Set(activePlan(db, patientId).objectives.map((o) => o.id));
+  for (const k of Object.keys(body || {})) {
+    const m = k.match(/^obj_(\d+)_addressed$/);
+    if (!m) continue;
+    const id = Number(m[1]);
+    if (!allowed.has(id)) { error = "One or more selected objectives aren't on this patient's active treatment plan."; continue; }
+    const progress = str(body[`obj_${id}_progress`]);
+    if (progress && !OBJ_PROGRESS.some((o) => o.value === progress)) { error = "Choose a valid progress rating for each objective."; continue; }
+    selected[id] = { progress, comment: str(body[`obj_${id}_comment`]).slice(0, MAX_OBJ_COMMENT) };
+  }
+  return { selected, error };
+}
+
+/** Replace a draft note's objective links. Caller ensures the note is a draft. */
+function saveObjectives(db, noteId, selected) {
+  db.prepare("DELETE FROM note_objectives WHERE note_id = ?").run(noteId);
+  const ins = db.prepare("INSERT INTO note_objectives (note_id, objective_id, progress, comment) VALUES (?, ?, ?, ?)");
+  for (const [id, v] of Object.entries(selected)) ins.run(noteId, Number(id), v.progress || null, v.comment || null);
+}
+
 /** Read submitted form fields into { content, risk_level, service_date } plus validation errors (draft-level). */
-function readForm(body, type, format) {
+function readForm(body, type, format, prev = {}) {
   const content = {};
   const errors = {};
   let risk_level = null;
   for (const f of fieldsFor(type, format)) {
     if (f.kind === "textarea" || f.kind === "text") content[f.key] = str(body[f.key]);
+    else if (f.kind === "edition") {
+      const v = str(body[f.key]);
+      if (v && !ASAM_EDITIONS.some((o) => o.value === v)) errors[f.key] = "Choose an ASAM Criteria edition.";
+      else content[f.key] = v || "4";
+    } else if (f.kind === "asam_level") {
+      const v = str(body[f.key]);
+      const ed = asamEdition(content);
+      const opt = ASAM_LEVEL_OPTIONS.find((o) => o.value === v);
+      if (v && !opt) errors[f.key] = `Choose a valid option for ${f.label}.`;
+      else if (opt && !opt.editions.includes(ed)) errors[f.key] = `${opt.label} isn't a level in the ${ed === "4" ? "4th" : "3rd"} edition.`;
+      else content[f.key] = v;
+    } else if (f.kind === "legacy") {
+      // Not on the form; carry forward whatever an older draft already had.
+      if (prev[f.key] !== undefined && prev[f.key] !== "") content[f.key] = prev[f.key];
+    }
     else if (f.kind === "select") {
       const v = str(body[f.key]);
       if (v && !f.options.some((o) => o.value === v)) errors[f.key] = `Choose a valid option for ${f.label}.`;
@@ -257,6 +388,7 @@ function readForm(body, type, format) {
       if (r && !/^[0-4]$/.test(r)) errors[`${f.key}_rating`] = "Choose a rating from 0 to 4.";
       else content[`${f.key}_rating`] = r;
       content[f.key] = str(body[f.key]);
+      if (f.driver) content[`${f.key}_driver`] = str(body[`${f.key}_driver`]) ? "1" : "";
     } else if (f.kind === "session") {
       content.session_start = str(body.session_start);
       content.session_end = str(body.session_end);
@@ -284,15 +416,17 @@ function readForm(body, type, format) {
 }
 
 /** Requirements for signing. Returns { key: message }. */
-function signErrors(note) {
+function signErrors(note, { planObjectiveCount = 0, addressedCount = 0 } = {}) {
   const c = parseContent(note);
   const errors = {};
   const empty = (v) => !v || (Array.isArray(v) ? v.length === 0 : !String(v).trim());
+  const ed = asamEdition(c);
   for (const f of fieldsFor(note.type, note.format)) {
-    if (["textarea", "text", "select", "date"].includes(f.kind) && f.required && empty(c[f.key])) errors[f.key] = `${f.label} is required.`;
+    if (["textarea", "text", "select", "date", "asam_level"].includes(f.kind) && f.required && empty(c[f.key])) errors[f.key] = `${f.label} is required.`;
     if (f.kind === "rated") {
-      if (empty(c[`${f.key}_rating`])) errors[`${f.key}_rating`] = `${f.label}: rating is required.`;
-      if (empty(c[f.key])) errors[f.key] = `${f.label}: narrative is required.`;
+      const label = f.labels[ed];
+      if (empty(c[`${f.key}_rating`])) errors[`${f.key}_rating`] = `${label}: rating is required.`;
+      if (empty(c[f.key])) errors[f.key] = `${label}: narrative is required.`;
     }
     if (f.kind === "session") {
       if (empty(c.session_start)) errors.session_start = "Session start time is required.";
@@ -308,6 +442,12 @@ function signErrors(note) {
       }
     }
   }
+  if (note.type === "asam" && !empty(c.adjusted_level) && !empty(c.indicated_level) &&
+      c.adjusted_level !== c.indicated_level && empty(c.level_difference_reason)) {
+    errors.level_difference_reason = "Explain why the adjusted level of care differs from the indicated level.";
+  }
+  // Golden thread: with an active plan that has objectives, a session note must say which it addressed.
+  if (PLAN_LINKED_TYPES.includes(note.type) && planObjectiveCount > 0 && addressedCount < 1) errors.objectives = OBJ_SIGN_MSG;
   if (!note.service_date) errors.service_date = "Service date is required.";
   return errors;
 }
@@ -340,6 +480,44 @@ function psychotherapyNotice() {
     Document diagnosis, risk, interventions and progress in a progress note instead.</div>`;
 }
 
+/**
+ * Dimension label for both editions; CSS shows the one matching the edition select (the server-side
+ * `hidden` attribute picks the initial one so it reads correctly without :has() support).
+ */
+function edLabel(f, v) {
+  const ed = asamEdition(v);
+  return html`<span class="asam-ed4" ${ed === "4" ? "" : raw("hidden")}>${f.labels["4"]}</span><span class="asam-ed3" ${ed === "3" ? "" : raw("hidden")}>${f.labels["3"]}</span>`;
+}
+
+/** "Treatment plan objectives addressed" fieldset for progress / group / psychiatry notes. */
+function objectivesFieldset(patient, plan, selected, errors) {
+  if (!plan.hasPlan) {
+    return html`<div class="alert alert--info span-all" role="note">${NO_PLAN_MSG}
+      <a href="/ehr/patients/${patient.id}/treatment-plan">Open the treatment plan</a></div>`;
+  }
+  let lastProblem = null;
+  let lastGoal = null;
+  return html`<fieldset class="span-all objectives-addressed"><legend>Treatment plan objectives addressed</legend>
+    ${errText(errors, "objectives")}
+    ${plan.objectives.length ? html`<p class="hint">Tick each objective worked on this session and rate progress. This records an observation only; objective status changes at plan review.</p>
+      <ul class="list-plain obj-list">${plan.objectives.map((o) => {
+        const sel = selected[o.id];
+        const head = o.problem_title !== lastProblem || o.goal_text !== lastGoal
+          ? html`<p class="obj-path"><strong>${o.problem_title}</strong> › ${o.goal_text}</p>` : "";
+        lastProblem = o.problem_title; lastGoal = o.goal_text;
+        return html`<li class="obj-item">${head}
+          <label class="check"><input type="checkbox" name="obj_${o.id}_addressed" value="1" ${sel ? raw("checked") : ""}>
+            <span>${o.text} <span class="muted">· ${o.target_date ? html`target ${fmtDate(o.target_date)} · ` : ""}status: ${humanize(o.status)}</span></span></label>
+          <div class="obj-fields">
+            <label>Progress ${select(`obj_${o.id}_progress`, [{ value: "", label: "Select…" }, ...OBJ_PROGRESS], sel ? sel.progress : "")}</label>
+            <label>Comment <input type="text" name="obj_${o.id}_comment" value="${sel ? sel.comment : ""}" maxlength="${MAX_OBJ_COMMENT}"></label>
+          </div></li>`;
+      })}</ul>`
+      : html`<p class="muted">The active treatment plan has no measurable objectives yet.
+        <a href="/ehr/patients/${patient.id}/treatment-plan">Add objectives to the plan</a></p>`}
+  </fieldset>`;
+}
+
 function fieldInputs(type, format, v, errors) {
   return fieldsFor(type, format).map((f) => {
     if (f.kind === "textarea") {
@@ -358,9 +536,30 @@ function fieldInputs(type, format, v, errors) {
       return html`<label>${f.label}${req_(f)}${f.hint ? html` <span class="hint">${f.hint}</span>` : ""}
         <input type="date" name="${f.key}" value="${v[f.key] || ""}">${errText(errors, f.key)}</label>`;
     }
+    if (f.kind === "edition") {
+      return html`<label class="span-all">${f.label}
+        <span class="hint">Dimension names and level options follow the edition. Saved notes keep the edition they were written in.</span>
+        ${select(f.key, ASAM_EDITIONS, asamEdition(v))}${errText(errors, f.key)}</label>`;
+    }
+    if (f.kind === "asam_level") {
+      const ed = asamEdition(v);
+      return html`<label class="span-all">${f.label}${req_(f)}${f.hint ? html` <span class="hint">${f.hint}</span>` : ""}
+        <select name="${f.key}" id="${f.key}"><option value="">Select…</option>${ASAM_LEVEL_OPTIONS.map((o) => {
+          const cls = o.editions.length === 2 ? "" : `asam-ed${o.editions[0]}`;
+          return html`<option value="${o.value}" class="${cls}" ${o.value === v[f.key] ? raw("selected") : ""} ${o.editions.includes(ed) ? "" : raw("hidden")}>${o.label}</option>`;
+        })}</select>
+        ${f.key === "indicated_level" ? html`<span class="hint">${ASAM_LEVEL_HINT}</span>` : ""}${errText(errors, f.key)}</label>`;
+    }
+    if (f.kind === "legacy") {
+      const val = v[f.key];
+      if (val === undefined || val === null || String(val).trim() === "") return "";
+      const o = f.options ? f.options.find((x) => x.value === val) : null;
+      return html`<p class="span-all hint">Recorded before the template update. ${f.label}: <strong>${o ? o.label : val}</strong></p>`;
+    }
     if (f.kind === "rated") {
-      return html`<fieldset class="span-all"><legend>${f.label}</legend><div class="form-grid">
+      return html`<fieldset class="span-all"><legend>${edLabel(f, v)}</legend><div class="form-grid">
         <label>Risk rating <span class="hint">(required to sign)</span>${select(`${f.key}_rating`, ASAM_RATINGS, v[`${f.key}_rating`])}${errText(errors, `${f.key}_rating`)}</label>
+        ${f.driver ? html`<label class="check"><input type="checkbox" name="${f.key}_driver" value="1" ${v[`${f.key}_driver`] ? raw("checked") : ""}> Dimensional driver of level of care</label>` : ""}
         <label class="span-all">Findings <span class="hint">(required to sign)</span><textarea name="${f.key}" rows="3">${v[f.key] || ""}</textarea>${errText(errors, f.key)}</label>
       </div></fieldset>`;
     }
@@ -394,7 +593,7 @@ function fieldInputs(type, format, v, errors) {
   });
 }
 
-function noteForm(req, res, { patient, type, format, values, errors = {}, action, appointmentId, title, status = 200, noteId }) {
+function noteForm(req, res, { patient, type, format, values, errors = {}, action, appointmentId, title, status = 200, noteId, objectives = {} }) {
   const formats = formatsFor(type);
   const formatSwitch = !noteId && formats.length > 1 ? html`
     <p class="row"><span class="muted">Format:</span>${formats.map((f) => f === format
@@ -416,6 +615,7 @@ function noteForm(req, res, { patient, type, format, values, errors = {}, action
       <div class="form-grid">
         <label>Service date<input type="date" name="service_date" value="${values.service_date || ""}" required>${errText(errors, "service_date")}</label>
         ${fieldInputs(type, format, values, errors)}
+        ${PLAN_LINKED_TYPES.includes(type) ? objectivesFieldset(patient, activePlan(req.db, patient.id), objectives, errors) : ""}
       </div>
       <div class="form-actions">
         <button class="btn btn--primary" type="submit">Save draft</button>
@@ -433,15 +633,33 @@ function section(label, text) {
 function noteBody(note) {
   const c = parseContent(note);
   return fieldsFor(note.type, note.format).map((f) => {
+    if (f.key === "level_difference_reason" && !String(c[f.key] || "").trim()) return "";
     if (f.kind === "textarea" || f.kind === "text") return section(f.label, c[f.key]);
     if (f.kind === "select") {
       const o = f.options.find((x) => x.value === c[f.key] && x.value !== "");
       return section(f.label, o ? o.label : "");
     }
     if (f.kind === "date") return section(f.label, c[f.key] ? fmtDate(c[f.key]) : "");
+    if (f.kind === "edition") {
+      return section(f.label, c.asam_edition ? (ASAM_EDITIONS.find((o) => o.value === c.asam_edition) || {}).label
+        : "3rd edition (recorded before edition selection)");
+    }
+    if (f.kind === "asam_level") {
+      const o = ASAM_LEVEL_OPTIONS.find((x) => x.value === c[f.key]);
+      // Hide empty new-format level fields on notes written with the old single "recommended level".
+      if (!o && c.recommended_level && !c.indicated_level) return "";
+      if (f.key === "adjusted_level" && !o) return section(f.label, c.indicated_level ? "Same as indicated level" : "");
+      return section(f.label, o ? o.label : "");
+    }
+    if (f.kind === "legacy") {
+      const val = c[f.key];
+      if (val === undefined || val === null || String(val).trim() === "") return "";
+      const o = f.options ? f.options.find((x) => x.value === val) : null;
+      return section(f.label, o ? o.label : val);
+    }
     if (f.kind === "rated") {
       const o = ASAM_RATINGS.find((x) => x.value === c[`${f.key}_rating`] && x.value !== "");
-      return html`<div class="note-section"><h3>${f.label}</h3>
+      return html`<div class="note-section"><h3>${f.labels[asamEdition(c)]}${c[`${f.key}_driver`] ? html` <span class="pill">Dimensional driver</span>` : ""}</h3>
         <p>Rating: ${o ? html`<strong>${o.label}</strong>` : html`<span class="muted">Not rated</span>`}</p>
         ${c[f.key] ? html`<p>${c[f.key]}</p>` : ""}</div>`;
     }
@@ -481,6 +699,17 @@ function renderNote(req, res, { note, patient }, { signErrs = {}, addendumError 
   const isAuthor = note.author_id === req.user.id;
   const isDraft = note.status === "draft";
   const canWrite = can(req.user, "clinical:write");
+  const linked = PLAN_LINKED_TYPES.includes(note.type);
+  const addressed = linked ? noteObjectives(req.db, note.id) : [];
+  const noPlanWarning = linked && isDraft && !activePlan(req.db, patient.id).hasPlan
+    ? html`<div class="alert alert--info no-print" role="note">${NO_PLAN_MSG}
+        <a href="/ehr/patients/${patient.id}/treatment-plan">Open the treatment plan</a></div>` : "";
+  const objectivesSection = linked ? html`<div class="note-section"><h3>Treatment plan objectives addressed</h3>
+    ${addressed.length ? html`<ul class="list-plain obj-list">${addressed.map((o) => html`<li class="obj-item">
+        <p class="obj-path"><strong>${o.problem_title}</strong> › ${o.goal_text}</p>
+        <p>${o.text}${o.progress ? html` · <strong>${(OBJ_PROGRESS.find((x) => x.value === o.progress) || {}).label}</strong>` : ""}</p>
+        ${o.comment ? html`<p class="muted">${o.comment}</p>` : ""}</li>`)}</ul>`
+      : html`<p class="muted">None recorded</p>`}</div>` : "";
 
   const actions = html`
     <div class="row no-print">
@@ -523,6 +752,7 @@ function renderNote(req, res, { note, patient }, { signErrs = {}, addendumError 
     <div class="page-head"><h2>${typeLabel(note)} ${badge(note.status)}</h2>${actions}</div>
     ${note.type === "psychotherapy" ? psychotherapyNotice() : ""}
     ${note.type === "roi" ? roiNotice(parseContent(note).includes_sud === "yes") : ""}
+    ${noPlanWarning}
     <article class="card">
       <dl class="facts">
         <dt>Patient</dt><dd>${patientName(patient)} (MRN ${patient.mrn})</dd>
@@ -532,6 +762,7 @@ function renderNote(req, res, { note, patient }, { signErrs = {}, addendumError 
       </dl>
       <hr>
       ${noteBody(note)}
+      ${objectivesSection}
       ${signatureLine(note)}
     </article>
     ${signForm}
@@ -591,12 +822,13 @@ router.get("/patients/:id/notes/new", requirePerm("clinical:write"), (req, res) 
   if (type === "safety_plan") values.professional_contacts =
     "Primary clinician: \nClinic: (555) 010-0123\n988 Suicide & Crisis Lifeline: call or text 988\nEmergency: 911 or nearest emergency department: ";
   if (type === "roi") values.signed_on = today();
+  if (type === "asam") values.asam_edition = "4";
   if (appt) {
     values.service_date = appt.start_at.slice(0, 10);
     if (type === "progress" || type === "group") { values.session_start = appt.start_at.slice(11, 16); values.session_end = appt.end_at.slice(11, 16); }
   }
   noteForm(req, res, { patient, type, format, values, action: `/ehr/patients/${patient.id}/notes`,
-    appointmentId: appt ? appt.id : null, title: `New ${TYPES[type].label.replace(/^\w/, (c) => c.toLowerCase()).replace(/^asam/, "ASAM")}` });
+    appointmentId: appt ? appt.id : null, title: `New ${TYPES[type].label.replace(/^\w/, (c) => c.toLowerCase()).replace(/^aSAM/, "ASAM")}` });
 });
 
 router.post("/patients/:id/notes", requirePerm("clinical:write"), (req, res) => {
@@ -609,15 +841,21 @@ router.post("/patients/:id/notes", requirePerm("clinical:write"), (req, res) => 
   const { appt, error } = loadAppointment(req, patient.id, str(req.body.appointment_id));
   const form = readForm(req.body, type, format);
   if (error) form.errors.appointment_id = error;
+  const objs = PLAN_LINKED_TYPES.includes(type) ? readObjectives(req.db, req.body, patient.id) : { selected: {}, error: null };
+  if (objs.error) form.errors.objectives = objs.error;
   if (Object.keys(form.errors).length) {
     return noteForm(req, res, { patient, type, format, values: { ...form.content, risk_level: form.risk_level, service_date: form.service_date },
       errors: form.errors, action: `/ehr/patients/${patient.id}/notes`, appointmentId: appt ? appt.id : null,
-      title: `New ${TYPES[type].label.replace(/^\w/, (c) => c.toLowerCase()).replace(/^asam/, "ASAM")}`, status: 400 });
+      title: `New ${TYPES[type].label.replace(/^\w/, (c) => c.toLowerCase()).replace(/^aSAM/, "ASAM")}`, status: 400, objectives: objs.selected });
   }
-  const id = Number(req.db.prepare(
-    `INSERT INTO notes (patient_id, appointment_id, author_id, type, format, content, risk_level, status, service_date)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?)`).run(patient.id, appt ? appt.id : null, req.user.id, type, format,
-    JSON.stringify(form.content), form.risk_level, form.service_date).lastInsertRowid);
+  const id = tx(req.db, () => {
+    const noteId = Number(req.db.prepare(
+      `INSERT INTO notes (patient_id, appointment_id, author_id, type, format, content, risk_level, status, service_date)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', ?)`).run(patient.id, appt ? appt.id : null, req.user.id, type, format,
+      JSON.stringify(form.content), form.risk_level, form.service_date).lastInsertRowid);
+    saveObjectives(req.db, noteId, objs.selected);
+    return noteId;
+  });
   audit(req, "create", "note", id, patient.id, type);
   req.flash("success", "Draft saved. Review and sign when complete.");
   res.redirect(`/ehr/notes/${id}`);
@@ -674,23 +912,32 @@ router.get("/notes/:noteId/edit", requirePerm("clinical:write"), (req, res) => {
   audit(req, "view", "note", note.id, patient.id, "edit form");
   noteForm(req, res, { patient, type: note.type, format: note.format,
     values: { ...parseContent(note), risk_level: note.risk_level, service_date: note.service_date },
-    action: `/ehr/notes/${note.id}/edit`, title: `Edit ${typeLabel(note).toLowerCase()}`, noteId: note.id });
+    action: `/ehr/notes/${note.id}/edit`, title: `Edit ${typeLabel(note).toLowerCase()}`, noteId: note.id,
+    objectives: objectiveValues(req.db, note.id) });
 });
 
 router.post("/notes/:noteId/edit", requirePerm("clinical:write"), (req, res) => {
   const loaded = loadNote(req, res);
   if (!loaded || !editGuard(req, res, loaded.note)) return;
   const { note, patient } = loaded;
-  const form = readForm(req.body, note.type, note.format);
+  const form = readForm(req.body, note.type, note.format, parseContent(note));
+  const objs = PLAN_LINKED_TYPES.includes(note.type) ? readObjectives(req.db, req.body, patient.id) : { selected: {}, error: null };
+  if (objs.error) form.errors.objectives = objs.error;
   if (Object.keys(form.errors).length) {
     return noteForm(req, res, { patient, type: note.type, format: note.format,
       values: { ...form.content, risk_level: form.risk_level, service_date: form.service_date }, errors: form.errors,
-      action: `/ehr/notes/${note.id}/edit`, title: `Edit ${typeLabel(note).toLowerCase()}`, noteId: note.id, status: 400 });
+      action: `/ehr/notes/${note.id}/edit`, title: `Edit ${typeLabel(note).toLowerCase()}`, noteId: note.id, status: 400,
+      objectives: objs.selected });
   }
-  const r = req.db.prepare(
-    `UPDATE notes SET content = ?, risk_level = ?, service_date = ?, updated_at = datetime('now')
-     WHERE id = ? AND author_id = ? AND status = 'draft'`).run(JSON.stringify(form.content), form.risk_level, form.service_date, note.id, req.user.id);
-  if (r.changes !== 1) return deny(req, res, "Signed notes can't be edited. Add an addendum instead.");
+  const changed = tx(req.db, () => {
+    const r = req.db.prepare(
+      `UPDATE notes SET content = ?, risk_level = ?, service_date = ?, updated_at = datetime('now')
+       WHERE id = ? AND author_id = ? AND status = 'draft'`).run(JSON.stringify(form.content), form.risk_level, form.service_date, note.id, req.user.id);
+    if (r.changes !== 1) return false;
+    if (PLAN_LINKED_TYPES.includes(note.type)) saveObjectives(req.db, note.id, objs.selected);
+    return true;
+  });
+  if (!changed) return deny(req, res, "Signed notes can't be edited. Add an addendum instead.");
   audit(req, "update", "note", note.id, patient.id);
   req.flash("success", "Draft saved.");
   res.redirect(`/ehr/notes/${note.id}`);
@@ -702,7 +949,13 @@ router.post("/notes/:noteId/sign", requirePerm("clinical:write"), (req, res) => 
   const { note, patient } = loaded;
   if (note.author_id !== req.user.id) return deny(req, res, "Only the note's author can sign it.");
   if (note.status !== "draft") return deny(req, res, "This note is already signed.");
-  const errors = signErrors(note);
+  let thread = {};
+  if (PLAN_LINKED_TYPES.includes(note.type)) {
+    const ids = activePlan(req.db, patient.id).objectives.map((o) => o.id);
+    const linkedIds = new Set(req.db.prepare("SELECT objective_id FROM note_objectives WHERE note_id = ?").all(note.id).map((r) => r.objective_id));
+    thread = { planObjectiveCount: ids.length, addressedCount: ids.filter((i) => linkedIds.has(i)).length };
+  }
+  const errors = signErrors(note, thread);
   const pw = typeof req.body.password === "string" ? req.body.password : "";
   const stored = req.db.prepare("SELECT password_hash FROM users WHERE id = ?").get(req.user.id);
   if (!pw || !stored || !verifyPassword(pw, stored.password_hash)) {
@@ -753,4 +1006,4 @@ router.post("/notes/:noteId/delete", requirePerm("clinical:write"), (req, res) =
   res.redirect(`/ehr/patients/${patient.id}/notes`);
 });
 
-module.exports = { router, TYPES };
+module.exports = { router, TYPES, activePlan, signErrors };
