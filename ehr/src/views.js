@@ -32,6 +32,8 @@ function html(strings, ...vals) {
 
 /* ---------------- formatting ---------------- */
 const TZ = process.env.EHR_TZ || "America/New_York";
+// Banner shows in development and demo deployments; hidden in production unless EHR_DEMO=1.
+const SHOW_DEMO_BANNER = process.env.NODE_ENV !== "production" || process.env.EHR_DEMO === "1";
 
 /** Clinic-local today as 'YYYY-MM-DD'. */
 function today(offsetDays = 0) {
@@ -150,7 +152,7 @@ function page(req, { title, active = "", body, bare = false }) {
         </aside>
         <div class="app__main">
           <header class="topbar">
-            <div class="topbar__demo">Demo environment. Use synthetic data only.</div>
+            ${SHOW_DEMO_BANNER ? html`<div class="topbar__demo">Demo environment. Use synthetic data only.</div>` : html`<span></span>`}
             <div class="topbar__user">
               <span>${user.name}${user.credentials ? `, ${user.credentials}` : ""} · <span class="muted">${humanize(user.role)}</span></span>
               <a class="btn btn--ghost btn--sm" href="/ehr/account">Account</a>

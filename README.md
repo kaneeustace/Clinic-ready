@@ -28,6 +28,18 @@ Demo logins all use the password `Demo-Password-2026!`:
 | Front desk | frontdesk@example.com | Patients (non-clinical), scheduling, website requests; view billing |
 | Billing | billing@example.com | Patients (non-clinical), charges, payments, superbills |
 
+## Deploy (always-on link)
+
+**Render (can be done from a phone):**
+1. Sign in at render.com with GitHub. Choose **New → Blueprint** and pick this repo and branch. Render reads `render.yaml`.
+2. When asked, enter `EHR_ADMIN_EMAIL` (your email) and `EHR_ADMIN_PASSWORD`. The password needs 12+ characters and 3 of: lowercase, uppercase, number, symbol.
+3. Deploy. Open `https://<your-app>.onrender.com/ehr` and sign in.
+4. Create your staff accounts under **Admin → Users**. Then delete `EHR_ADMIN_PASSWORD` from the Render environment settings; it's only used on first boot.
+
+The blueprint uses a paid instance with a 1 GB persistent disk (the free tier would erase the database on every restart). Production mode creates **no demo accounts or demo data**. To deploy a throwaway demo instead, add `EHR_DEMO=1`.
+
+**Anywhere else:** use the root `Dockerfile` (mount a volume at `/var/data`). It's the same setup.
+
 ## Website
 
 | File | Page |

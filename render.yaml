@@ -1,0 +1,35 @@
+# Render Blueprint: one-click deploy of the website + EHR.
+# On render.com: New > Blueprint > pick this repo. You'll be asked for the two
+# secret values below (your admin email and a strong password).
+#
+# The persistent disk keeps the SQLite database across deploys; it needs a paid
+# instance type (the free tier has no disk and would erase data on every restart).
+# Do NOT store real patient information unless your hosting account is covered by a
+# signed BAA. See README "Before using real PHI".
+services:
+  - type: web
+    name: clinic-ready
+    runtime: node
+    plan: starter
+    rootDir: ehr
+    buildCommand: npm ci --omit=dev
+    startCommand: npm start
+    healthCheckPath: /healthz
+    autoDeploy: true
+    disk:
+      name: ehr-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: TRUST_PROXY
+        value: "1"
+      - key: EHR_DB_PATH
+        value: /var/data/ehr.sqlite
+      - key: EHR_TZ
+        value: America/New_York
+      - key: EHR_ADMIN_EMAIL
+        sync: false
+      - key: EHR_ADMIN_PASSWORD
+        sync: false

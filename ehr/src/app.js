@@ -53,6 +53,7 @@ function createApp(db) {
   if (process.env.TRUST_PROXY) app.set("trust proxy", process.env.TRUST_PROXY);
   app.use(securityHeaders);
   app.use((req, res, next) => { req.db = db; next(); });
+  app.get("/healthz", (req, res) => { db.prepare("SELECT 1").get(); res.set("Cache-Control", "no-store").json({ ok: true }); });
 
   /* ---------- Public marketing site: only whitelisted files from the repo root ---------- */
   app.use("/assets", express.static(path.join(SITE_ROOT, "assets"), { maxAge: "1h", dotfiles: "deny" }));
