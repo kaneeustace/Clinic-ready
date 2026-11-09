@@ -808,7 +808,7 @@ function errorSummary(errors) {
 const errText = (errors, k) => (errors && errors[k] ? html`<span class="error-text">${errors[k]}</span>` : "");
 let reqCtx = { ahcccs: false };
 const req_ = (f) => (f.required ? html` <span class="hint">(required to sign)</span>`
-  : f.ahcccs ? html` <span class="hint ahcccs-req">${reqCtx.ahcccs ? `(required to sign${f.when ? " when applicable" : ""})` : "(AHCCCS)"}</span>` : "");
+  : f.ahcccs ? html` <span class="hint ahcccs-req">${reqCtx.ahcccs ? `(required to sign${f.when ? " when applicable" : ""})` : ""}</span>` : "");
 
 function roiNotice(includesSud) {
   return html`<div class="alert alert--info" role="note"><strong>Client rights for this consent.</strong>
@@ -866,7 +866,11 @@ function objectivesFieldset(patient, plan, selected, errors) {
 
 function fieldInputs(type, format, v, errors, ctx = {}) {
   reqCtx = { ahcccs: !!ctx.ahcccs };
+  const blankVal = (k) => v[k] === undefined || v[k] === null || String(v[k]).trim() === "";
   return fieldsFor(type, format).map((f) => {
+    // AHCCCS-only fields appear only for clients with an AHCCCS ID (kept if a value was already recorded).
+    if (!ctx.ahcccs && f.ahcccs && f.kind !== "session" && f.kind !== "mse" && blankVal(f.key)) return "";
+    if (f.kind === "heading" && !ctx.ahcccs) return "";
     if (f.kind === "heading") {
       return html`<div class="span-all form-subhead"><h3>${f.label}${ctx.ahcccs ? html` <span class="badge badge--info">AHCCCS member</span>` : ""}</h3>
         <p class="hint">${ctx.ahcccs ? "This client is an AHCCCS member: these fields are required to sign." : f.hint}</p></div>`;
@@ -927,7 +931,7 @@ function fieldInputs(type, format, v, errors, ctx = {}) {
       </div></fieldset>`;
     }
     if (f.kind === "session" && f.ahcccs) {
-      const h = ctx.ahcccs ? html`<span class="hint">(required to sign; actual times)</span>` : html`<span class="hint">(AHCCCS)</span>`;
+      const h = ctx.ahcccs ? html`<span class="hint">(required to sign; actual times)</span>` : "";
       return html`
         <label>Start time ${h}<input type="time" name="session_start" value="${v.session_start || ""}">${errText(errors, "session_start")}</label>
         <label>Stop time ${h}<input type="time" name="session_end" value="${v.session_end || ""}">${errText(errors, "session_end")}</label>`;

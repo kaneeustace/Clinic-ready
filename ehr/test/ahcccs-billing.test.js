@@ -41,12 +41,14 @@ before(async () => {
 });
 after(async () => { await t.stop(); });
 
-test("AHCCCS detection via AHCCCS ID or an AHCCCS health plan policy", async () => {
+test("AHCCCS detection via AHCCCS ID only (an AHCCCS plan alone does not turn it on)", async () => {
   assert.equal(isAhcccs(t.db, adult), true);
   assert.equal(isAhcccs(t.db, commercial), false);
   const viaPlan = newPatient("ViaPlan", "1980-01-01", null);
   assert.equal(isAhcccs(t.db, viaPlan), false);
   t.db.prepare("INSERT INTO insurance_policies (patient_id, payer_name, member_id) VALUES (?, 'Mercy Care', 'M1')").run(viaPlan);
+  assert.equal(isAhcccs(t.db, viaPlan), false);
+  t.db.prepare("UPDATE patients SET ahcccs_id = 'A33333333' WHERE id = ?").run(viaPlan);
   assert.equal(isAhcccs(t.db, viaPlan), true);
 
   // Patient form stores the AHCCCS ID uppercased and validates the format; the overview shows the pill.
@@ -326,4 +328,13 @@ test("education-level modifier suggestion from the rendering provider", async ()
   assert.match(form.text, /AHCCCS member/);
   assert.match(form.text, /name="pos"/);
   assert.match(form.text, /name="note_id"/);
+});
+
+test("AHCCCS plan without an AHCCCS ID: no AHCCCS fields, reminder to add the ID", async () => {
+  const pid = newPatient("NoId", "1982-02-02", null);
+  t.db.prepare("INSERT INTO insurance_policies (patient_id, payer_name, member_id) VALUES (?, 'Mercy Care', 'M2')").run(pid);
+  const c = await t.login("admin");
+  const r = await c.get(`/ehr/patients/${pid}`);
+  assert.match(r.text, /Add the client&#39;s AHCCCS ID|Add the client's AHCCCS ID/);
+  assert.doesNotMatch(r.text, /<dt>AHCCCS ID<\/dt>/);
 });

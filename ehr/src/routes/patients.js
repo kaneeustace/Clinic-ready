@@ -8,7 +8,7 @@ const { requirePerm, forbidden } = require("../auth");
 const { can } = require("../permissions");
 const { audit } = require("../audit");
 const { tx, nextMrn } = require("../db");
-const { isAhcccs } = require("../payers");
+const { isAhcccs, isAhcccsPlan } = require("../payers");
 const {
   html, raw, page, chartPage, notFound, csrfField, badge, getPatient, patientName,
   today, nowLocal, fmtDate, fmtDateTime, age, money, parseMoney, humanize,
@@ -574,7 +574,7 @@ function renderOverview(req, res, patient, state = null, status = 200) {
         <dt>Gender identity</dt><dd>${patient.gender_identity || dash}</dd>
         <dt>Pronouns</dt><dd>${patient.pronouns || dash}</dd>
         <dt>Gender (claims)</dt><dd>${patient.gender ? (GENDER_OPTIONS.find((o) => o.value === patient.gender) || {}).label || patient.gender : dash}</dd>
-        <dt>AHCCCS ID</dt><dd>${patient.ahcccs_id || dash}</dd>
+        ${patient.ahcccs_id ? html`<dt>AHCCCS ID</dt><dd>${patient.ahcccs_id}</dd>` : ""}
         <dt>MRN</dt><dd>${patient.mrn}</dd>
         <dt>Primary clinician</dt><dd>${clinician ? `${clinician.name}${clinician.credentials ? `, ${clinician.credentials}` : ""}` : html`<span class="muted">Unassigned</span>`}</dd>
         <dt>Status</dt><dd>${badge(patient.status)}</dd>
@@ -605,6 +605,8 @@ function renderOverview(req, res, patient, state = null, status = 200) {
   const insurance = html`
     <section class="card" id="insurance" aria-labelledby="ins-h">
       <div class="card__head"><h2 id="ins-h">Insurance</h2></div>
+      ${!ahcccs && policies.some((p) => isAhcccsPlan(p.payer_name)) ? html`<div class="alert alert--warn" role="note">This looks like an AHCCCS health plan.
+        ${canPtWrite ? html`<a href="/ehr/patients/${pid}/edit">Add the client's AHCCCS ID</a>` : "Add the client's AHCCCS ID"} to turn on the AHCCCS note, plan and billing fields.</div>` : ""}
       ${policies.length ? html`
         <div class="table-wrap"><table class="table">
           <thead><tr><th scope="col">Priority</th><th scope="col">Payer</th><th scope="col">Member ID</th><th scope="col">Group</th><th scope="col">Subscriber</th><th scope="col" class="num">Copay</th>${canPtWrite ? html`<th scope="col"><span class="visually-hidden">Actions</span></th>` : ""}</tr></thead>

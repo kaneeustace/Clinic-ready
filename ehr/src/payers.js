@@ -1,21 +1,18 @@
 "use strict";
 /*
- * Payer profiles. AHCCCS (Arizona Medicaid) rules apply when:
- *   - EHR_PAYER_PROFILE=AHCCCS (clinic-wide), or
- *   - the patient has an active insurance policy from AHCCCS or an AHCCCS health plan, or an AHCCCS ID on file.
- * Plan names change; keep AHCCCS_PLANS current with your contracts.
+ * Payer profiles. AHCCCS (Arizona Medicaid) fields, rules and checks apply only when the patient has an
+ * AHCCCS ID on file. Everyone else gets the standard forms.
+ * AHCCCS_PLANS is used to remind staff to enter the AHCCCS ID when an AHCCCS health plan is added.
  */
 const AHCCCS_PLANS = [/ahcccs/i, /mercy care/i, /banner.*(university|health plan)/i, /\bb-?uhp\b/i, /arizona complete health/i, /\bazch\b/i,
   /unitedhealthcare community plan/i, /\buhccp\b/i, /care1st/i, /health choice/i, /molina.*arizona/i, /\bdcs chp\b/i, /comprehensive health plan/i,
   /\baihp\b/i, /american indian health program/i, /\btrbha\b/i];
 
 function profileFor(db, patientId) {
-  if (String(process.env.EHR_PAYER_PROFILE || "").toUpperCase() === "AHCCCS") return "AHCCCS";
   const p = db.prepare("SELECT ahcccs_id FROM patients WHERE id = ?").get(patientId);
-  if (p && p.ahcccs_id) return "AHCCCS";
-  const pols = db.prepare("SELECT payer_name FROM insurance_policies WHERE patient_id = ? AND active = 1").all(patientId);
-  return pols.some((x) => AHCCCS_PLANS.some((re) => re.test(x.payer_name || ""))) ? "AHCCCS" : "STANDARD";
+  return p && p.ahcccs_id && String(p.ahcccs_id).trim() ? "AHCCCS" : "STANDARD";
 }
+const isAhcccsPlan = (name) => AHCCCS_PLANS.some((re) => re.test(name || ""));
 const isAhcccs = (db, patientId) => profileFor(db, patientId) === "AHCCCS";
 
 /** AHCCCS 15-minute unit rule (CBHSG Core Billing Limitation #10): <8 min = 0; 8-22 = 1; 23-37 = 2; ... */
@@ -34,4 +31,4 @@ function educationModifier(user) {
   return null;
 }
 
-module.exports = { profileFor, isAhcccs, unitsFor15, educationModifier, AHCCCS_PLANS };
+module.exports = { profileFor, isAhcccs, isAhcccsPlan, unitsFor15, educationModifier, AHCCCS_PLANS };

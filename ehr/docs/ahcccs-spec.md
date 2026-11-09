@@ -15,7 +15,7 @@ Built from research on AHCCCS primary sources, downloaded 2026-11-09:
 
 AHCCCS updates its code tables every quarter or year, so treat codes and modifiers as configuration and re-verify them against the current B2 Matrix and Telehealth Code Set.
 
-**When it applies:** `src/payers.js` `isAhcccs(db, patientId)` is true for patients with an AHCCCS ID or an AHCCCS plan policy, or for every patient when `EHR_PAYER_PROFILE=AHCCCS`. Other patients keep the existing rules.
+**When it applies:** `src/payers.js` `isAhcccs(db, patientId)` is true only for patients with an AHCCCS ID on file. AHCCCS-only fields are hidden for everyone else (values already recorded stay visible). If an AHCCCS health plan is on file without an ID, the Insurance card reminds staff to add the ID.
 
 ## A. Progress / encounter notes (AMPM 940 §4.l; CBHSG core limitations)
 

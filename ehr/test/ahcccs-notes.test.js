@@ -23,6 +23,7 @@ before(async () => {
     t.db.prepare("INSERT INTO diagnoses (patient_id, icd10_code, description, status, is_primary) VALUES (?, 'F41.1', 'Generalized anxiety disorder', 'active', 1)").run(pid);
   }
   t.db.prepare("INSERT INTO insurance_policies (patient_id, payer_name, member_id, active) VALUES (?, 'Mercy Care', 'A11111111', 1)").run(mercy);
+  t.db.prepare("UPDATE patients SET ahcccs_id = 'A11111111' WHERE id = ?").run(mercy);
   t.db.prepare("UPDATE patients SET ahcccs_id = 'A22222222' WHERE id = ?").run(idOnly);
   t.db.prepare("INSERT INTO insurance_policies (patient_id, payer_name, member_id, active) VALUES (?, 'Example Mutual', 'X1', 1)").run(commercial);
 });
@@ -57,32 +58,38 @@ async function create(c, pid, body) {
   return noteIdFrom(r);
 }
 
-test("AHCCCS detection: Mercy Care policy, AHCCCS ID, and commercial", () => {
+test("AHCCCS detection: only clients with an AHCCCS ID", () => {
   assert.equal(isAhcccs(t.db, mercy), true);
   assert.equal(isAhcccs(t.db, idOnly), true);
   assert.equal(isAhcccs(t.db, commercial), false);
 });
 
-test("encounter fields render for everyone; screener results prefill from assessments", async () => {
+test("AHCCCS encounter fields render only for clients with an AHCCCS ID; screener results prefill", async () => {
   t.db.prepare("INSERT INTO assessments (patient_id, instrument, responses, total_score, severity, administered_on) VALUES (?, 'PHQ9', '[]', 14, 'moderate', ?)")
     .run(commercial, today());
   const c = await t.login("therapist");
   const r = await c.get(`/ehr/patients/${commercial}/notes/new?type=progress`);
   assert.equal(r.status, 200);
-  assert.match(r.text, /Encounter details \(AHCCCS\)/);
-  assert.match(r.text, /name="service_type"/);
-  assert.match(r.text, /PHQ9 14 \(moderate\)/);
-  assert.match(r.text, /F41\.1 Generalized anxiety disorder/);
+  assert.doesNotMatch(r.text, /AHCCCS/);
+  assert.doesNotMatch(r.text, /name="service_type"/);
+  t.db.prepare("INSERT INTO assessments (patient_id, instrument, responses, total_score, severity, administered_on) VALUES (?, 'PHQ9', '[]', 14, 'moderate', ?)")
+    .run(mercy, today());
   const m = await c.get(`/ehr/patients/${mercy}/notes/new?type=progress`);
   assert.match(m.text, /AHCCCS member/);
+  assert.match(m.text, /Encounter details \(AHCCCS\)/);
+  assert.match(m.text, /name="service_type"/);
+  assert.match(m.text, /PHQ9 14 \(moderate\)/);
+  assert.match(m.text, /F41\.1 Generalized anxiety disorder/);
   // AHCCCS members: actual times, not the schedule.
   const appt = t.db.prepare("INSERT INTO appointments (patient_id, clinician_id, start_at, end_at, type, modality, status) VALUES (?, ?, ?, ?, 'therapy', 'in_person', 'completed')")
     .run(mercy, t.ctx.users.therapist, `${today()}T08:00`, `${today()}T08:50`).lastInsertRowid;
   const pre = await c.get(`/ehr/patients/${mercy}/notes/new?type=progress&appointment_id=${appt}`);
   assert.match(pre.text, /name="session_start" value=""/);
   for (const type of ["group", "psychiatry", "contact"]) {
-    const g = await c.get(`/ehr/patients/${commercial}/notes/new?type=${type}`);
+    const g = await c.get(`/ehr/patients/${mercy}/notes/new?type=${type}`);
     assert.match(g.text, /name="member_response"/, type);
+    const cm = await c.get(`/ehr/patients/${commercial}/notes/new?type=${type}`);
+    assert.doesNotMatch(cm.text, /name="member_response"/, type);
   }
 });
 
