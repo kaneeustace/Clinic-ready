@@ -4,7 +4,9 @@
   "private": true,
   "description": "Outpatient behavioral health EHR for Clinic Ready (demo/prototype).",
   "main": "server.js",
-  "engines": { "node": ">=22.5" },
+  "engines": {
+    "node": ">=22.5"
+  },
   "scripts": {
     "start": "node --no-warnings server.js",
     "dev": "node --no-warnings --watch server.js",
@@ -15,6 +17,7 @@
     "backup:restore": "node --no-warnings scripts/restore-backup.js"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.6.0",
     "express": "^5.1.0"
   }
 }

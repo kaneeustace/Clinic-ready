@@ -33,6 +33,11 @@ services:
         sync: false
       - key: EHR_ADMIN_PASSWORD
         sync: false
+      # AI note compliance review (optional). Turn on only after signing a BAA with Anthropic.
+      - key: EHR_AI_REVIEW
+        value: "0"
+      - key: ANTHROPIC_API_KEY
+        sync: false
       # Encrypted backups (HIPAA contingency plan). Without EHR_BACKUP_KEY backups are DISABLED.
       # Generate: node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
       # and keep a copy in your password manager: without it, backups cannot be decrypted.

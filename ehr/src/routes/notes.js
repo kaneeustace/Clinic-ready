@@ -9,6 +9,7 @@ const { requirePerm, verifyPassword } = require("../auth");
 const { can } = require("../permissions");
 const { audit } = require("../audit");
 const { tx } = require("../db");
+const { reviewNote } = require("../ai-review");
 const {
   html, raw, page, chartPage, notFound, csrfField, select, badge, getPatient, patientName,
   today, fmtDate, fmtTime, fmtTimestamp, humanize,
@@ -792,7 +793,34 @@ function signatureLine(note) {
   return html`<p class="signature">Electronically signed by ${userLine({ name: note.signer_name, credentials: note.signer_credentials })} on ${fmtTimestamp(note.signed_at)}</p>`;
 }
 
-function renderNote(req, res, { note, patient }, { signErrs = {}, addendumError = "", addendumText = "", status = 200 } = {}) {
+/** Results panel for the insurance compliance check. */
+function reviewPanel(review) {
+  if (!review) return "";
+  const SEV = { high: "bad", medium: "warn", low: "info" };
+  const all = [...review.rules, ...(review.ai.ok ? review.ai.findings : [])];
+  const order = { high: 0, medium: 1, low: 2 };
+  all.sort((a, b) => order[a.severity] - order[b.severity]);
+  const counts = ["high", "medium", "low"].map((sv) => [sv, all.filter((f) => f.severity === sv).length]);
+  return html`
+    <section class="card no-print" id="compliance" aria-labelledby="cr-h" tabindex="-1">
+      <div class="card__head"><h2 id="cr-h">Insurance compliance check</h2>
+        <span class="row">${counts.map(([sv, n]) => html`<span class="badge badge--${SEV[sv]}">${n} ${sv}</span>`)}</span></div>
+      ${review.ai.ok ? html`<p><strong>AI summary:</strong> ${review.ai.summary}</p>`
+        : review.ai.skipped ? html`<p class="alert alert--info">Rule-based checks only. AI review is off; an administrator can enable it once a BAA with Anthropic is in place.</p>`
+        : html`<p class="alert alert--warn">${review.ai.error}</p>`}
+      ${all.length ? html`<ul class="list-plain">${all.map((f) => html`
+        <li>
+          <p class="row" style="margin-bottom:.25rem"><span class="badge badge--${SEV[f.severity] || "muted"}">${f.severity}</span>
+            <strong>${f.category}</strong> <span class="pill">${f.source === "ai" ? "AI" : "Rule"}</span></p>
+          <p style="margin-bottom:.25rem">${f.issue}</p>
+          ${f.quote ? html`<p class="muted small">“${f.quote}”</p>` : ""}
+          <p class="small"><strong>Fix:</strong> ${f.suggestion}</p>
+        </li>`)}</ul>` : html`<p class="alert alert--success">No documentation problems found.</p>`}
+      <p class="hint">Advisory only. Payer rules vary; the clinician remains responsible for the documentation. Nothing in the note was changed.</p>
+    </section>`;
+}
+
+function renderNote(req, res, { note, patient }, { signErrs = {}, addendumError = "", addendumText = "", status = 200, review = null } = {}) {
   const addenda = req.db.prepare(
     `SELECT a.*, u.name, u.credentials FROM note_addenda a JOIN users u ON u.id = a.author_id
      WHERE a.note_id = ? ORDER BY a.created_at, a.id`).all(note.id);
@@ -815,6 +843,9 @@ function renderNote(req, res, { note, patient }, { signErrs = {}, addendumError 
   const actions = html`
     <div class="row no-print">
       <button class="btn btn--sm" type="button" data-print>Print</button>
+      ${canWrite && COMPLIANCE_TYPES.includes(note.type) ? html`
+        <form class="inline-form" method="post" action="/ehr/notes/${note.id}/compliance-review">${csrfField(req)}
+          <button class="btn btn--sm btn--primary" type="submit">Check insurance compliance</button></form>` : ""}
       ${isAuthor && isDraft ? html`
         <a class="btn btn--sm" href="/ehr/notes/${note.id}/edit">Edit draft</a>
         <form class="inline-form" method="post" action="/ehr/notes/${note.id}/delete" data-confirm="Delete this draft? This cannot be undone.">
@@ -851,6 +882,7 @@ function renderNote(req, res, { note, patient }, { signErrs = {}, addendumError 
 
   const body = html`
     <div class="page-head"><h2>${typeLabel(note)} ${badge(note.status)}</h2>${actions}</div>
+    ${reviewPanel(review)}
     ${note.type === "psychotherapy" ? psychotherapyNotice() : ""}
     ${note.type === "roi" ? roiNotice(parseContent(note).includes_sud === "yes") : ""}
     ${noPlanWarning}
@@ -1051,6 +1083,18 @@ router.post("/notes/:noteId/edit", requirePerm("clinical:write"), (req, res) => 
   audit(req, "update", "note", note.id, patient.id);
   req.flash("success", "Draft saved.");
   res.redirect(`/ehr/notes/${note.id}`);
+});
+
+const COMPLIANCE_TYPES = ["progress", "group", "psychiatry", "intake", "discharge"];
+
+router.post("/notes/:noteId/compliance-review", requirePerm("clinical:write"), async (req, res) => {
+  const loaded = loadNote(req, res);
+  if (!loaded) return;
+  if (!COMPLIANCE_TYPES.includes(loaded.note.type)) return deny(req, res, "Compliance checks apply to billable clinical notes.");
+  const review = await reviewNote(req.db, loaded.note);
+  audit(req, "compliance_review", "note", loaded.note.id, loaded.patient.id,
+    `rules:${review.rules.length} ai:${review.ai.ok ? review.ai.findings.length : review.ai.skipped ? "off" : "error"}`);
+  renderNote(req, res, loaded, { review });
 });
 
 router.post("/notes/:noteId/sign", requirePerm("clinical:write"), (req, res) => {
