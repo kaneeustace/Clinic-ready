@@ -290,3 +290,58 @@ label, fieldset, .form-grid > * { min-width: 0; }
 .obj-item label.check { align-items: flex-start; }
 .obj-item label.check input { margin-top: .2rem; }
 fieldset .form-grid > label.check { align-self: end; min-height: 2.5rem; }
+
+/* ---------- Treatment plans ---------- */
+.pill--warn { background: var(--warn-bg); color: var(--warn); border-color: #f5dfae; }
+a.pill { text-decoration: none; } a.pill:hover { filter: brightness(.97); }
+textarea.ta-sm { min-height: 64px; }
+.plan-tree-head { margin: 1.5rem 0 .75rem; align-items: center; } .plan-tree-head h2 { margin: 0; }
+.plan-num { font-size: .72rem; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); }
+.plan-actions { display: inline-flex; flex-wrap: wrap; gap: .1rem; align-items: center; }
+.plan-actions .btn--sm { min-height: 28px; padding: .2rem .5rem; }
+.plan-goal { border-left: 3px solid var(--primary-light); padding: .25rem 0 .25rem 1rem; margin: 1rem 0 .5rem; }
+.plan-goal__text { font-weight: 600; margin-bottom: .75rem; }
+.plan-obj { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: .85rem 1rem; margin-bottom: .75rem; }
+.plan-obj__head { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-bottom: .35rem; }
+.plan-obj__text { margin: 0 0 .6rem; font-weight: 500; }
+.plan-sub { font-size: .72rem; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); margin: .75rem 0 .25rem; }
+.plan-ints > li { padding: .45rem 0; display: grid; gap: .15rem; }
+.plan-int__main { display: flex; flex-wrap: wrap; gap: .45rem; align-items: baseline; }
+.plan-quote { margin: .25rem 0 .6rem; padding: .35rem .9rem; border-left: 3px solid var(--teal); color: var(--text); font-style: italic; background: #f2faf9; border-radius: 0 6px 6px 0; }
+.plan-quote--lg { font-size: 1.05rem; }
+.thread { margin: .4rem 0 0; color: var(--text); }
+.measure { display: grid; gap: .35rem; margin: .25rem 0 .5rem; }
+.measure__nums { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; }
+.measure__nums > span:not(.measure__arrow) { display: grid; min-width: 70px; padding: .3rem .6rem; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; }
+.measure__nums small { font-size: .68rem; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+.measure__nums strong { font-size: 1.15rem; font-variant-numeric: tabular-nums; }
+.measure__arrow { color: var(--faint); }
+.progress { height: 8px; max-width: 420px; border-radius: 999px; background: var(--surface-3); overflow: hidden; }
+.progress > span { display: block; height: 100%; background: linear-gradient(90deg, var(--teal), var(--primary)); border-radius: inherit; }
+.checklist__item { display: flex; gap: .6rem; align-items: center; }
+.review-obj { margin-bottom: 1rem; } .review-obj .measure { margin-bottom: .75rem; }
+.part2 { font-size: .82rem; }
+.print-toolbar { display: flex; justify-content: space-between; max-width: 900px; margin: 1rem auto 0; padding: 0 1rem; }
+.print-sheet { max-width: 900px; margin: 1rem auto 2rem; background: #fff; border: 1px solid var(--border); border-radius: var(--radius); padding: 2.25rem 2.5rem; box-shadow: var(--shadow); }
+.print-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 1rem; border-bottom: 2px solid var(--text); padding-bottom: 1rem; margin-bottom: 1.25rem; }
+.print-head h1 { margin: 0 0 .2rem; }
+.print-org { font-weight: 700; color: var(--primary); margin: 0 0 .25rem; font-size: .85rem; letter-spacing: .04em; text-transform: uppercase; }
+.print-patient { font-size: .88rem; }
+.print-sec { margin-bottom: 1.25rem; break-inside: avoid-page; }
+.print-sec h2 { font-size: .95rem; border-bottom: 1px solid var(--border); padding-bottom: .3rem; }
+.print-problem { margin-bottom: 1rem; }
+.print-table { font-size: .84rem; margin-bottom: .5rem; } .print-table td { vertical-align: top; }
+.print-ints { margin: .35rem 0 0; padding-left: 1.1rem; color: var(--muted); }
+.sig-grid { display: grid; gap: 1.25rem; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.sig-box { display: grid; gap: .1rem; }
+.sig-line { border-bottom: 1px solid var(--text); min-height: 2rem; display: flex; align-items: flex-end; padding-bottom: .2rem; color: var(--muted); }
+.print-foot { border-top: 1px solid var(--border); padding-top: .75rem; margin-top: 1.5rem; }
+@media (max-width: 760px) { .print-sheet { padding: 1.25rem; margin: .5rem; } }
+@media print {
+  .print-sheet { border: 0; box-shadow: none; padding: 0; margin: 0; max-width: none; }
+  .print-toolbar, .plan-actions { display: none !important; }
+  .plan-obj { break-inside: avoid; }
+}
+dl.facts.plan-facts { grid-template-columns: minmax(110px, 34%) minmax(0, 1fr); }
+.form-grid--narrow { max-width: 380px; }
+.card.stack > h2 { margin-bottom: 0; }

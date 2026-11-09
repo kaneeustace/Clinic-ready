@@ -56,6 +56,8 @@ function migrate(db, schema) {
     for (const [name, def] of cols) if (!have.has(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${def}`);
   }
 
+  migrateLegacyGoals(db);
+
   for (const [table, marker, count, indexes] of REBUILDS) {
     const current = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(table);
     if (!current || current.sql.split(marker).length - 1 >= count) continue;
@@ -74,6 +76,40 @@ function migrate(db, schema) {
       db.exec("PRAGMA foreign_keys = ON;");
     }
   }
+}
+
+/**
+ * One-time conversion of v1 treatment plans (free-text rows in treatment_goals) into the v2
+ * problem → goal → objective → intervention tables. Only touches plans that have treatment_goals
+ * rows and no plan_problems yet, so it is idempotent; treatment_goals is left as read-only history.
+ */
+const LEGACY_STATUS = { not_started: "not_started", in_progress: "progressing", met: "met", revised: "revised", discontinued: "discontinued" };
+function migrateLegacyGoals(db) {
+  const plans = db.prepare(
+    `SELECT tp.* FROM treatment_plans tp
+     WHERE EXISTS (SELECT 1 FROM treatment_goals g WHERE g.plan_id = tp.id)
+       AND NOT EXISTS (SELECT 1 FROM plan_problems p WHERE p.plan_id = tp.id)`).all();
+  if (!plans.length) return 0;
+  const goalsOf = db.prepare("SELECT * FROM treatment_goals WHERE plan_id = ? ORDER BY sort, id");
+  const insP = db.prepare("INSERT INTO plan_problems (plan_id, sort, title, status) VALUES (?, ?, ?, ?)");
+  const insG = db.prepare("INSERT INTO plan_goals (problem_id, sort, goal_text) VALUES (?, 0, ?)");
+  const insO = db.prepare(`INSERT INTO plan_objectives (goal_id, sort, text, measure_type, direction, target_date, status)
+    VALUES (?, 0, ?, 'attainment', 'achieve', ?, ?)`);
+  const insI = db.prepare("INSERT INTO plan_interventions (objective_id, sort, kind, description) VALUES (?, 0, 'professional', ?)");
+  tx(db, () => {
+    for (const plan of plans) {
+      goalsOf.all(plan.id).forEach((g, i) => {
+        const status = LEGACY_STATUS[g.status] || "not_started";
+        const pid = Number(insP.run(plan.id, i, g.problem, g.status === "met" ? "resolved" : "active").lastInsertRowid);
+        const gid = Number(insG.run(pid, g.goal).lastInsertRowid);
+        const oid = Number(insO.run(gid, (g.objectives && g.objectives.trim()) || g.goal, g.target_date || null, status).lastInsertRowid);
+        insI.run(oid, (g.interventions && g.interventions.trim()) || "See objective");
+      });
+      // v1 recorded only signed_at; treat it as the activation time for plans that were in effect.
+      if (plan.status !== "draft") db.prepare("UPDATE treatment_plans SET activated_at = COALESCE(activated_at, signed_at) WHERE id = ?").run(plan.id);
+    }
+  });
+  return plans.length;
 }
 
 /** Run fn inside a transaction; rolls back on throw. */
@@ -95,4 +131,4 @@ function nextMrn(db) {
   return "CR-" + String(row.n).padStart(6, "0");
 }
 
-module.exports = { openDb, tx, nextMrn };
+module.exports = { openDb, tx, nextMrn, migrateLegacyGoals };

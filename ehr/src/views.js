@@ -217,6 +217,22 @@ function getPatient(req, id) {
   return req.db.prepare("SELECT * FROM patients WHERE id = ?").get(Number(id)) || null;
 }
 
+/** Treatment plan alert for the chart banner: review overdue / due within 7 days / no active plan while in care. */
+function planBanner(db, patient, base) {
+  const t = today();
+  const plan = db.prepare("SELECT review_date FROM treatment_plans WHERE patient_id = ? AND status = 'active' ORDER BY id DESC LIMIT 1").get(patient.id);
+  if (plan) {
+    if (plan.review_date && plan.review_date < t) return html`<a class="pill pill--bad" href="${base}/treatment-plan">Plan review overdue (${fmtDate(plan.review_date)})</a>`;
+    if (plan.review_date && plan.review_date <= addDays(t, 7)) return html`<a class="pill pill--warn" href="${base}/treatment-plan">Plan review due ${fmtDate(plan.review_date)}</a>`;
+    return "";
+  }
+  if (patient.status !== "active") return "";
+  const inCare = db.prepare(
+    `SELECT 1 FROM appointments WHERE patient_id = ? AND status NOT IN ('cancelled','late_cancel','no_show')
+     AND type NOT IN ('intake','consult') AND substr(start_at, 1, 10) >= ? LIMIT 1`).get(patient.id, addDays(t, -60));
+  return inCare ? html`<a class="pill pill--warn" href="${base}/treatment-plan">No active treatment plan</a>` : "";
+}
+
 function chartPage(req, patient, tab, body, { title } = {}) {
   const allergies = req.db.prepare("SELECT substance FROM allergies WHERE patient_id = ? AND active = 1").all(patient.id);
   const clinician = patient.primary_clinician_id
@@ -224,6 +240,7 @@ function chartPage(req, patient, tab, body, { title } = {}) {
   const flagged = can(req.user, "clinical:read") && req.db.prepare(
     `SELECT 1 FROM assessments WHERE patient_id = ? AND flagged = 1 AND administered_on >= ? LIMIT 1`).get(patient.id, addDays(today(), -30));
   const base = `/ehr/patients/${patient.id}`;
+  const planPill = can(req.user, "clinical:read") ? planBanner(req.db, patient, base) : "";
   const header = html`
     <section class="chart-head" aria-label="Patient summary">
       <span class="avatar avatar--lg" aria-hidden="true">${initials(`${patient.first_name} ${patient.last_name}`)}</span>
@@ -244,6 +261,7 @@ function chartPage(req, patient, tab, body, { title } = {}) {
             ? html`<span class="pill pill--bad">Allergies: ${allergies.map((a) => a.substance).join(", ")}</span>`
             : html`<span class="pill">NKA (no known allergies)</span>`}
           ${flagged ? html`<span class="pill pill--bad">Safety flag: positive suicide risk screen in last 30 days</span>` : ""}
+          ${planPill}
         </div>
       </div>
       <div class="chart-head__actions">

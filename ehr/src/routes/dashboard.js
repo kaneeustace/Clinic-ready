@@ -26,6 +26,14 @@ router.get("/", (req, res) => {
      WHERE a.flagged = 1 AND a.administered_on >= ?
      ${mineOnly ? "AND p.primary_clinician_id = ?" : ""} ORDER BY a.administered_on DESC LIMIT 10`).all(addDays(t, -14), ...(mineOnly ? [u.id] : [])) : [];
 
+  // Treatment plans due for review in the next 7 days or overdue: own patients for clinicians, all for admins.
+  const duePlans = can(u, "clinical:read") ? db.prepare(
+    `SELECT tp.id, tp.patient_id, tp.review_date, tp.version, p.first_name, p.last_name, p.preferred_name
+     FROM treatment_plans tp JOIN patients p ON p.id = tp.patient_id
+     WHERE tp.status = 'active' AND tp.review_date IS NOT NULL AND tp.review_date <= ?
+     ${mineOnly ? "AND (p.primary_clinician_id = ? OR tp.author_id = ?)" : ""}
+     ORDER BY tp.review_date, p.last_name LIMIT 25`).all(addDays(t, 7), ...(mineOnly ? [u.id, u.id] : [])) : null;
+
   const tile = (label, value, href) => value === null ? "" : html`
     <a class="tile" href="${href}"><span class="tile__num">${value}</span><span class="tile__label">${label}</span></a>`;
 
@@ -45,6 +53,15 @@ router.get("/", (req, res) => {
           <h2>Safety follow-up</h2>
           <p class="muted">A suicide risk screen (PHQ-9 item 9 or C-SSRS) was positive in the last 14 days. Make sure a risk assessment and safety plan are documented.</p>
           <ul class="list">${flags.map((f) => html`<li><a href="/ehr/patients/${f.patient_id}/measures">${patientName(f)}</a> · ${f.instrument === "CSSRS" ? `C-SSRS ${f.severity}` : `PHQ-9 ${f.total_score}, item 9 endorsed`} on ${f.administered_on}</li>`)}</ul>
+        </section>` : ""}
+      ${duePlans ? html`
+        <section class="card" aria-labelledby="due-plans">
+          <div class="card__head"><h2 id="due-plans">Treatment plans due for review</h2><span class="muted small">Next 7 days or overdue${mineOnly ? " · your patients" : ""}</span></div>
+          ${duePlans.length ? html`<ul class="list-plain">${duePlans.map((d) => html`
+            <li class="row"><a href="/ehr/patients/${d.patient_id}/treatment-plan">${patientName(d)}</a>
+              ${d.review_date < t ? html`<span class="badge badge--bad">Overdue</span>` : html`<span class="badge badge--warn">Due soon</span>`}
+              <span class="muted small">Review ${d.review_date < t ? "was due" : "due"} ${fmtDate(d.review_date)} · plan v${d.version}</span></li>`)}</ul>`
+            : html`<p class="muted">No plan reviews due in the next 7 days.</p>`}
         </section>` : ""}
       ${can(u, "schedule:read") ? html`
         <section class="card">

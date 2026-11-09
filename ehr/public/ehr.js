@@ -31,6 +31,17 @@
     form.addEventListener("change", update);
     update();
   });
+  // Treatment plan objective: choosing an instrument fills an empty baseline from the latest score
+  // (<select data-prefill-baseline="inputId"> with <option data-latest="n">).
+  document.querySelectorAll("select[data-prefill-baseline]").forEach(function (sel) {
+    sel.addEventListener("change", function () {
+      var opt = sel.options[sel.selectedIndex];
+      var target = document.getElementById(sel.getAttribute("data-prefill-baseline"));
+      var mt = sel.form && sel.form.querySelector("select[name=measure_type]");
+      if (sel.value && mt) mt.value = "instrument";
+      if (target && opt && opt.getAttribute("data-latest") !== null && !target.value) target.value = opt.getAttribute("data-latest");
+    });
+  });
   // Idle warning: sessions expire server-side; nudge the user after 25 minutes idle.
   var idleMs = 25 * 60 * 1000, timer;
   function reset() { clearTimeout(timer); timer = setTimeout(function () {

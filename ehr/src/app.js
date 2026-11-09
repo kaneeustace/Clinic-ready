@@ -10,7 +10,7 @@ const EHR_PUBLIC = path.resolve(__dirname, "..", "public");
 
 // Feature modules. Each exports `router` (mounted at /ehr, behind login);
 // requests.js also exports `publicRouter` (mounted at /api, no login).
-const MODULES = ["dashboard", "patients", "schedule", "notes", "clinical", "billing", "requests", "admin"];
+const MODULES = ["dashboard", "patients", "schedule", "notes", "clinical", "plans", "billing", "requests", "admin"];
 
 function securityHeaders(req, res, next) {
   res.set({
