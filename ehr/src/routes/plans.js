@@ -2030,7 +2030,7 @@ router.get("/treatment-plans/:planId/print", READ, (req, res) => {
         <dl class="facts print-patient">
           <dt>Client</dt><dd>${patientName(patient)}</dd>
           <dt>DOB</dt><dd>${fmtDate(patient.dob)}</dd>
-          <dt>MRN</dt><dd>${patient.mrn}</dd>
+          <dt>MRN</dt><dd>${patient.mrn}</dd>${patient.ahcccs_id ? html`<dt>AHCCCS ID</dt><dd>${patient.ahcccs_id}</dd>` : ""}
           <dt>Start</dt><dd>${plan.start_date ? fmtDate(plan.start_date) : "On activation"}</dd>
           <dt>Next review</dt><dd>${plan.review_date && plan.status !== "draft" ? fmtDate(plan.review_date) : `Every ${plan.review_interval_days} days`}</dd>
         </dl>

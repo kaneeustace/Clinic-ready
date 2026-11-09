@@ -372,3 +372,10 @@ dl.facts.plan-facts { grid-template-columns: minmax(110px, 34%) minmax(0, 1fr); 
 .signature.cosign { margin-top: .25rem; }
 .cosign--pending .badge { margin-right: .35rem; }
 @media print { .late-entry .badge, .cosign .badge { border: 1px solid currentColor; } }
+
+/* Member identifier repeated at the bottom of every printed page */
+.print-id { display: none; }
+@media print {
+  .print-id { display: block; position: fixed; bottom: 0; left: 0; right: 0; padding: 4px 0; border-top: 1px solid #ccc; background: #fff; font-size: 9pt; color: #333; }
+  .chart-body { padding-bottom: 28px; }
+}

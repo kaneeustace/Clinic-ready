@@ -194,7 +194,7 @@ function page(req, { title, active = "", body, bare = false }) {
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/ehr/static/ehr.css?v=5">
+  <link rel="stylesheet" href="/ehr/static/ehr.css?v=6">
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
@@ -258,6 +258,7 @@ function chartPage(req, patient, tab, body, { title } = {}) {
         </div>
         <dl class="chart-head__meta">
           <div><dt>MRN</dt><dd>${patient.mrn}</dd></div>
+          ${patient.ahcccs_id ? html`<div class="chart-head__ahcccs"><dt>AHCCCS ID</dt><dd>${patient.ahcccs_id}</dd></div>` : ""}
           <div><dt>DOB</dt><dd>${fmtDate(patient.dob)} · ${age(patient.dob)} y</dd></div>
           ${patient.pronouns ? html`<div><dt>Pronouns</dt><dd>${patient.pronouns}</dd></div>` : ""}
           <div><dt>Clinician</dt><dd>${clinician ? `${clinician.name}${clinician.credentials ? `, ${clinician.credentials}` : ""}` : "Unassigned"}</dd></div>
@@ -285,7 +286,9 @@ function chartPage(req, patient, tab, body, { title } = {}) {
       ${CHART_TABS.filter((t) => can(req.user, t.perm)).map((t) => html`
         <a href="${base + t.path}" ${t.key === tab ? raw('aria-current="page"') : ""}>${t.label}</a>`)}
     </nav>`;
-  return page(req, { title: title || patientName(patient), active: "patients", body: html`${header}<div class="chart-body">${body}</div>` });
+  // Printed on every page (AHCCCS/AMPM 940: member name and AHCCCS ID or DOB on each page).
+  const printId = html`<div class="print-id" aria-hidden="true">${patientName(patient)} · DOB ${fmtDate(patient.dob)} · MRN ${patient.mrn}${patient.ahcccs_id ? ` · AHCCCS ID ${patient.ahcccs_id}` : ""}</div>`;
+  return page(req, { title: title || patientName(patient), active: "patients", body: html`${header}<div class="chart-body">${body}</div>${printId}` });
 }
 
 function notFound(req, res, what = "Page") {

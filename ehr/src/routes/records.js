@@ -411,7 +411,7 @@ function recordHtml(req, patient, rec) {
         <dl class="facts print-patient">
           <dt>Client</dt><dd>${patientName(patient)}</dd>
           <dt>DOB</dt><dd>${fmtDate(patient.dob)}</dd>
-          <dt>MRN</dt><dd>${patient.mrn}</dd>
+          <dt>MRN</dt><dd>${patient.mrn}</dd>${patient.ahcccs_id ? html`<dt>AHCCCS ID</dt><dd>${patient.ahcccs_id}</dd>` : ""}
           <dt>Period</dt><dd>${range}</dd>
           <dt>Generated</dt><dd>${fmtTimestamp(rec.generated_at.replace("T", " ").slice(0, 19))}</dd>
         </dl>
@@ -690,7 +690,7 @@ router.get("/patients/:id/disclosures/accounting", requireDisclosureView, (req, 
         <dl class="facts print-patient">
           <dt>Client</dt><dd>${patientName(patient)}</dd>
           <dt>DOB</dt><dd>${fmtDate(patient.dob)}</dd>
-          <dt>MRN</dt><dd>${patient.mrn}</dd>
+          <dt>MRN</dt><dd>${patient.mrn}</dd>${patient.ahcccs_id ? html`<dt>AHCCCS ID</dt><dd>${patient.ahcccs_id}</dd>` : ""}
           <dt>Prepared</dt><dd>${fmtDate(t)}</dd>
         </dl>
       </header>
