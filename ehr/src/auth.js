@@ -157,7 +157,7 @@ function loginPage(req, { error, email = "" } = {}) {
         <div class="card login__card">
           <div class="login__brand"><span class="logo-dot" aria-hidden="true"></span> Clinic Ready <strong>EHR</strong></div>
           <h1>Staff sign in</h1>
-          ${req.db.prepare("SELECT COUNT(*) AS n FROM users").get().n === 0 ? html`<p class="alert alert--warn" role="status"><strong>Setup isn't finished: no staff accounts exist yet.</strong> In your hosting settings, set EHR_ADMIN_EMAIL and EHR_ADMIN_PASSWORD (12+ characters, using 3 of: lowercase, uppercase, number, symbol), then redeploy.</p>` : ""}
+          ${req.db.prepare("SELECT COUNT(*) AS n FROM users").get().n === 0 ? html`<p class="alert alert--warn" role="status"><strong>Setup isn't finished: no staff accounts exist yet.</strong> <a href="/ehr/setup">Create the administrator account</a>.</p>` : ""}
           ${req.query.expired ? html`<p class="alert alert--info" role="status">You were signed out after a period of inactivity.</p>` : ""}
           ${error ? html`<p class="alert alert--error" role="alert">${error}</p>` : ""}
           <form method="post" action="/ehr/login" class="stack">
@@ -177,6 +177,87 @@ function loginPage(req, { error, email = "" } = {}) {
       </div>`,
   });
 }
+
+/* ---------- First-run setup: create the first admin from the browser ----------
+ * Only while the database has zero users, and only within SETUP_WINDOW_MINUTES of
+ * server start (restart the service to reopen it). Closes permanently after use. */
+const SETUP_WINDOW_MINUTES = Number(process.env.EHR_SETUP_WINDOW_MINUTES || 60);
+const STARTED_AT = Date.now();
+const noUsers = (db) => db.prepare("SELECT COUNT(*) AS n FROM users").get().n === 0;
+const setupOpen = () => Date.now() - STARTED_AT < SETUP_WINDOW_MINUTES * 60e3;
+
+function setupPage(req, { errors = {}, values = {} } = {}) {
+  const err = (k) => (errors[k] ? html`<span class="error-text">${errors[k]}</span>` : "");
+  return page(req, {
+    title: "First-time setup",
+    bare: true,
+    body: html`
+      <div class="login">
+        <div class="card login__card">
+          <div class="login__brand"><span class="logo-dot" aria-hidden="true"></span> Clinic Ready <strong>EHR</strong></div>
+          <h1>Create the administrator account</h1>
+          <p class="muted">This page works once, while no accounts exist. Afterwards, add staff from Admin → Users.</p>
+          ${errors._ ? html`<p class="alert alert--error" role="alert">${errors._}</p>` : ""}
+          <form method="post" action="/ehr/setup" class="stack">
+            <label>Your name <input name="name" value="${values.name || ""}" autocomplete="name" required>${err("name")}</label>
+            <label>Email <input type="email" name="email" value="${values.email || ""}" autocomplete="username" required>${err("email")}</label>
+            <label>Password <input type="password" name="password" autocomplete="new-password" required>
+              <span class="hint">12+ characters, using 3 of: lowercase, uppercase, number, symbol.</span>${err("password")}</label>
+            <label>Confirm password <input type="password" name="confirm" autocomplete="new-password" required>${err("confirm")}</label>
+            <button class="btn btn--primary" type="submit">Create account and sign in</button>
+          </form>
+        </div>
+      </div>`,
+  });
+}
+
+function setupClosedPage(req) {
+  return page(req, { title: "Setup closed", bare: true, body: html`
+    <div class="login"><div class="card login__card">
+      <h1>Setup window closed</h1>
+      <p>For security, first-time setup is only open for ${SETUP_WINDOW_MINUTES} minutes after the server starts.
+      Restart the service in your hosting dashboard (Render: Manual Deploy → Restart service), then open this page again.</p>
+    </div></div>` });
+}
+
+router.get("/setup", (req, res) => {
+  if (!noUsers(req.db)) return res.redirect("/ehr/login");
+  if (!setupOpen()) return res.status(403).send(setupClosedPage(req));
+  res.send(setupPage(req));
+});
+
+router.post("/setup", (req, res) => {
+  if (!noUsers(req.db)) return res.redirect("/ehr/login");
+  if (!setupOpen()) return res.status(403).send(setupClosedPage(req));
+  const values = {
+    name: String(req.body.name || "").trim().slice(0, 100),
+    email: String(req.body.email || "").trim().slice(0, 200),
+  };
+  const password = String(req.body.password || "");
+  const errors = {};
+  if (!values.name) errors.name = "Enter your name.";
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(values.email)) errors.email = "Enter a valid email address.";
+  const pwErr = passwordPolicyError(password);
+  if (pwErr) errors.password = pwErr;
+  else if (password !== String(req.body.confirm || "")) errors.confirm = "Passwords don't match.";
+  if (Object.keys(errors).length) return res.status(400).send(setupPage(req, { errors, values }));
+
+  let userId;
+  req.db.exec("BEGIN IMMEDIATE");
+  try {
+    if (!noUsers(req.db)) { req.db.exec("ROLLBACK"); return res.redirect("/ehr/login"); }
+    userId = Number(req.db.prepare("INSERT INTO users (email, name, role, password_hash, last_login_at) VALUES (?, ?, 'admin', ?, datetime('now'))")
+      .run(values.email, values.name, hashPassword(password)).lastInsertRowid);
+    req.db.exec("COMMIT");
+  } catch (e) {
+    req.db.exec("ROLLBACK");
+    throw e;
+  }
+  req.user = { id: userId };
+  audit(req, "setup_admin_created", "user", userId);
+  createSession(req, res, userId);
+  res.redirect("/ehr");
+});
 
 router.get("/login", (req, res) => {
   if (req.user) return res.redirect("/ehr");
