@@ -35,6 +35,35 @@ const SESSION = { kind: "session", key: "session" };
 const INTERV = { kind: "interventions", key: "interventions" };
 const RISK = { kind: "risk", key: "risk" };
 const MSE_F = { kind: "mse", key: "mse" };
+const sel = (key, label, options, required = false, hint = "") => ({ kind: "select", key, label, options, required, hint });
+const dt = (key, label, required = false, hint = "") => ({ kind: "date", key, label, required, hint });
+/** A 0-4 risk rating plus narrative (used for ASAM dimensions). */
+const rated = (key, label, hint = "") => ({ kind: "rated", key, label, required: true, hint });
+const ASAM_RATINGS = [
+  { value: "", label: "Select…" }, { value: "0", label: "0: No risk / stable" }, { value: "1", label: "1: Mild" },
+  { value: "2", label: "2: Moderate" }, { value: "3", label: "3: Significant" }, { value: "4", label: "4: Severe / imminent" },
+];
+const ASAM_LEVELS = [
+  { value: "", label: "Select…" },
+  { value: "0.5", label: "0.5 Early intervention" },
+  { value: "1", label: "1 Outpatient services" },
+  { value: "2.1", label: "2.1 Intensive outpatient (IOP)" },
+  { value: "2.5", label: "2.5 Partial hospitalization (PHP)" },
+  { value: "3.1", label: "3.1 Clinically managed low-intensity residential" },
+  { value: "3.3", label: "3.3 Clinically managed population-specific high-intensity residential" },
+  { value: "3.5", label: "3.5 Clinically managed high-intensity residential" },
+  { value: "3.7", label: "3.7 Medically monitored intensive inpatient" },
+  { value: "4", label: "4 Medically managed intensive inpatient" },
+];
+const ROI_DIRECTIONS = [
+  { value: "", label: "Select…" }, { value: "release_to", label: "Release information TO this recipient" },
+  { value: "obtain_from", label: "Obtain information FROM this source" }, { value: "exchange", label: "Exchange information both ways" },
+];
+const YES_NO = [{ value: "", label: "Select…" }, { value: "yes", label: "Yes" }, { value: "no", label: "No" }];
+const CONSENT_METHODS = [
+  { value: "", label: "Select…" }, { value: "signed_paper", label: "Signed paper form (scanned / on file)" },
+  { value: "signed_electronic", label: "Signed electronically" }, { value: "guardian", label: "Signed by parent / legal guardian" },
+];
 
 const TYPES = {
   progress: {
@@ -76,6 +105,64 @@ const TYPES = {
     formats: {
       narrative: [tx1("contact_with", "Contact with / method", true, "e.g. Patient by phone; collateral (parent) by phone."),
         ta("narrative", "Narrative", true)],
+    },
+  },
+  group: {
+    label: "Group note",
+    formats: {
+      group: [tx1("group_name", "Group name", true, "e.g. DBT skills group, Anxiety group."), tx1("group_topic", "Session topic", true),
+        SESSION, tx1("attendance", "Attendance", false, "e.g. 7 of 9 members present. Don't name other members."),
+        ta("group_content", "Group content", true, "What was covered this session."),
+        ta("participation", "Client participation and response", true, "This client's engagement, contributions and response."),
+        INTERV, ta("plan", "Plan", true), RISK],
+    },
+  },
+  safety_plan: {
+    label: "Crisis safety plan",
+    formats: {
+      safety_plan: [
+        ta("warning_signs", "1. Warning signs", true, "Thoughts, moods, situations or behaviors that signal a crisis may be developing."),
+        ta("coping_strategies", "2. Things I can do on my own to cope", true, "Activities that help without contacting anyone."),
+        ta("distractions", "3. People and places that help distract me"),
+        ta("help_contacts", "4. People I can ask for help", true, "Names and phone numbers."),
+        ta("professional_contacts", "5. Professionals and crisis lines", true, "Clinician, after-hours line, 988, nearest emergency department."),
+        ta("means_safety", "6. Making my environment safer", true, "Steps to limit access to lethal means (medications, firearms, etc.)."),
+        ta("reasons_for_living", "Reasons for living", false, "What matters most to the client."),
+        tx1("copy_given", "Copy given to client", false, "e.g. Printed copy given; photo on phone."), RISK],
+    },
+  },
+  asam: {
+    label: "ASAM level of care assessment",
+    formats: {
+      asam: [
+        ta("substance_history", "Substance use history", true, "Substances, route, frequency, amount, last use, prior treatment."),
+        rated("dim1", "Dimension 1: Acute intoxication and/or withdrawal potential"),
+        rated("dim2", "Dimension 2: Biomedical conditions and complications"),
+        rated("dim3", "Dimension 3: Emotional, behavioral or cognitive conditions"),
+        rated("dim4", "Dimension 4: Readiness to change"),
+        rated("dim5", "Dimension 5: Relapse, continued use or continued problem potential"),
+        rated("dim6", "Dimension 6: Recovery / living environment"),
+        sel("recommended_level", "Recommended level of care", ASAM_LEVELS, true),
+        ta("level_justification", "Justification", true, "How the dimensional ratings support the recommended level."),
+        tx1("actual_level", "Level of care client will receive (if different)", false, "And the reason, e.g. availability or client preference."),
+        RISK],
+    },
+  },
+  roi: {
+    label: "Release of information (consent)",
+    formats: {
+      roi: [
+        sel("direction", "Direction", ROI_DIRECTIONS, true),
+        tx1("recipient", "Recipient / source", true, "Name, organization, address or fax."),
+        ta("information", "Specific information covered", true, "e.g. Dates of attendance, diagnosis, treatment summary. Be as narrow as possible."),
+        tx1("purpose", "Purpose", true, "e.g. Coordination of care with primary care provider."),
+        dt("expires_on", "Expires on", true, "Date or event when consent ends."),
+        sel("includes_sud", "Includes substance use disorder records (42 CFR Part 2)?", YES_NO, true),
+        sel("consent_method", "How consent was obtained", CONSENT_METHODS, true),
+        tx1("signed_by", "Signed by", true, "Client name, or guardian name and relationship."),
+        dt("signed_on", "Date signed", true),
+        ta("revocation", "Revocation", false, "Leave blank unless the client revokes; record date and how."),
+      ],
     },
   },
   discharge: {
@@ -157,7 +244,20 @@ function readForm(body, type, format) {
   let risk_level = null;
   for (const f of fieldsFor(type, format)) {
     if (f.kind === "textarea" || f.kind === "text") content[f.key] = str(body[f.key]);
-    else if (f.kind === "session") {
+    else if (f.kind === "select") {
+      const v = str(body[f.key]);
+      if (v && !f.options.some((o) => o.value === v)) errors[f.key] = `Choose a valid option for ${f.label}.`;
+      else content[f.key] = v;
+    } else if (f.kind === "date") {
+      const v = str(body[f.key]);
+      if (v && !isDate(v)) errors[f.key] = "Use YYYY-MM-DD.";
+      else content[f.key] = v;
+    } else if (f.kind === "rated") {
+      const r = str(body[`${f.key}_rating`]);
+      if (r && !/^[0-4]$/.test(r)) errors[`${f.key}_rating`] = "Choose a rating from 0 to 4.";
+      else content[`${f.key}_rating`] = r;
+      content[f.key] = str(body[f.key]);
+    } else if (f.kind === "session") {
       content.session_start = str(body.session_start);
       content.session_end = str(body.session_end);
       if (content.session_start && !isTime(content.session_start)) errors.session_start = "Use HH:MM.";
@@ -189,7 +289,11 @@ function signErrors(note) {
   const errors = {};
   const empty = (v) => !v || (Array.isArray(v) ? v.length === 0 : !String(v).trim());
   for (const f of fieldsFor(note.type, note.format)) {
-    if ((f.kind === "textarea" || f.kind === "text") && f.required && empty(c[f.key])) errors[f.key] = `${f.label} is required.`;
+    if (["textarea", "text", "select", "date"].includes(f.kind) && f.required && empty(c[f.key])) errors[f.key] = `${f.label} is required.`;
+    if (f.kind === "rated") {
+      if (empty(c[`${f.key}_rating`])) errors[`${f.key}_rating`] = `${f.label}: rating is required.`;
+      if (empty(c[f.key])) errors[f.key] = `${f.label}: narrative is required.`;
+    }
     if (f.kind === "session") {
       if (empty(c.session_start)) errors.session_start = "Session start time is required.";
       if (empty(c.session_end)) errors.session_end = "Session end time is required.";
@@ -220,6 +324,15 @@ function errorSummary(errors) {
 const errText = (errors, k) => (errors && errors[k] ? html`<span class="error-text">${errors[k]}</span>` : "");
 const req_ = (f) => (f.required ? html` <span class="hint">(required to sign)</span>` : "");
 
+function roiNotice(includesSud) {
+  return html`<div class="alert alert--info" role="note"><strong>Client rights for this consent.</strong>
+    The client may revoke this consent at any time, in writing, except where action has already been taken on it.
+    Treatment, payment and eligibility are not conditioned on signing. Release only the minimum information needed.
+    ${includesSud ? html`<br><strong>42 CFR Part 2:</strong> Records of substance use disorder treatment are protected by federal
+    confidentiality rules. Any disclosure must be accompanied by the required notice prohibiting further redisclosure,
+    and this consent must meet Part 2 content requirements. Confirm your form with your compliance officer.` : ""}</div>`;
+}
+
 function psychotherapyNotice() {
   return html`<div class="alert alert--info" role="note"><strong>Psychotherapy notes are private.</strong>
     Under HIPAA, psychotherapy notes (process notes) are kept separate from the medical record. Only you, the author,
@@ -236,6 +349,20 @@ function fieldInputs(type, format, v, errors) {
     if (f.kind === "text") {
       return html`<label class="span-all">${f.label}${req_(f)}${f.hint ? html` <span class="hint">${f.hint}</span>` : ""}
         <input type="text" name="${f.key}" value="${v[f.key] || ""}" maxlength="500">${errText(errors, f.key)}</label>`;
+    }
+    if (f.kind === "select") {
+      return html`<label class="span-all">${f.label}${req_(f)}${f.hint ? html` <span class="hint">${f.hint}</span>` : ""}
+        ${select(f.key, f.options, v[f.key])}${errText(errors, f.key)}</label>`;
+    }
+    if (f.kind === "date") {
+      return html`<label>${f.label}${req_(f)}${f.hint ? html` <span class="hint">${f.hint}</span>` : ""}
+        <input type="date" name="${f.key}" value="${v[f.key] || ""}">${errText(errors, f.key)}</label>`;
+    }
+    if (f.kind === "rated") {
+      return html`<fieldset class="span-all"><legend>${f.label}</legend><div class="form-grid">
+        <label>Risk rating <span class="hint">(required to sign)</span>${select(`${f.key}_rating`, ASAM_RATINGS, v[`${f.key}_rating`])}${errText(errors, `${f.key}_rating`)}</label>
+        <label class="span-all">Findings <span class="hint">(required to sign)</span><textarea name="${f.key}" rows="3">${v[f.key] || ""}</textarea>${errText(errors, f.key)}</label>
+      </div></fieldset>`;
     }
     if (f.kind === "session") {
       return html`
@@ -278,6 +405,7 @@ function noteForm(req, res, { patient, type, format, values, errors = {}, action
     <div class="page-head"><h2>${title}</h2>
       ${noteId ? html`<a class="btn btn--sm" href="/ehr/notes/${noteId}">Cancel</a>` : html`<a class="btn btn--sm" href="/ehr/patients/${patient.id}/notes">Cancel</a>`}</div>
     ${type === "psychotherapy" ? psychotherapyNotice() : ""}
+    ${type === "roi" ? roiNotice(values.includes_sud === "yes") : ""}
     ${errorSummary(errors)}
     ${formatSwitch}
     <form method="post" action="${action}" class="card" data-dirty-check>
@@ -306,6 +434,17 @@ function noteBody(note) {
   const c = parseContent(note);
   return fieldsFor(note.type, note.format).map((f) => {
     if (f.kind === "textarea" || f.kind === "text") return section(f.label, c[f.key]);
+    if (f.kind === "select") {
+      const o = f.options.find((x) => x.value === c[f.key] && x.value !== "");
+      return section(f.label, o ? o.label : "");
+    }
+    if (f.kind === "date") return section(f.label, c[f.key] ? fmtDate(c[f.key]) : "");
+    if (f.kind === "rated") {
+      const o = ASAM_RATINGS.find((x) => x.value === c[`${f.key}_rating`] && x.value !== "");
+      return html`<div class="note-section"><h3>${f.label}</h3>
+        <p>Rating: ${o ? html`<strong>${o.label}</strong>` : html`<span class="muted">Not rated</span>`}</p>
+        ${c[f.key] ? html`<p>${c[f.key]}</p>` : ""}</div>`;
+    }
     if (f.kind === "session") {
       return section("Session time", c.session_start || c.session_end
         ? `${fmtTime(`0000-00-00T${c.session_start || ""}`) || "?"} to ${fmtTime(`0000-00-00T${c.session_end || ""}`) || "?"}` : "");
@@ -383,6 +522,7 @@ function renderNote(req, res, { note, patient }, { signErrs = {}, addendumError 
   const body = html`
     <div class="page-head"><h2>${typeLabel(note)} ${badge(note.status)}</h2>${actions}</div>
     ${note.type === "psychotherapy" ? psychotherapyNotice() : ""}
+    ${note.type === "roi" ? roiNotice(parseContent(note).includes_sud === "yes") : ""}
     <article class="card">
       <dl class="facts">
         <dt>Patient</dt><dd>${patientName(patient)} (MRN ${patient.mrn})</dd>
@@ -436,7 +576,7 @@ router.get("/patients/:id/notes", requirePerm("clinical:read"), (req, res) => {
 /* ------------------------------------------------------------------ */
 /* New / create                                                       */
 /* ------------------------------------------------------------------ */
-const APPT_DEFAULT_TYPE = { intake: "intake", psychiatry_eval: "intake", med_management: "psychiatry" };
+const APPT_DEFAULT_TYPE = { intake: "intake", psychiatry_eval: "intake", med_management: "psychiatry", group: "group" };
 
 router.get("/patients/:id/notes/new", requirePerm("clinical:write"), (req, res) => {
   const patient = loadPatient(req, res);
@@ -448,12 +588,15 @@ router.get("/patients/:id/notes/new", requirePerm("clinical:write"), (req, res) 
   let format = String(req.query.format || "");
   if (!formatsFor(type).includes(format)) format = formatsFor(type)[0];
   const values = { service_date: today() };
+  if (type === "safety_plan") values.professional_contacts =
+    "Primary clinician: \nClinic: (555) 010-0123\n988 Suicide & Crisis Lifeline: call or text 988\nEmergency: 911 or nearest emergency department: ";
+  if (type === "roi") values.signed_on = today();
   if (appt) {
     values.service_date = appt.start_at.slice(0, 10);
-    if (type === "progress") { values.session_start = appt.start_at.slice(11, 16); values.session_end = appt.end_at.slice(11, 16); }
+    if (type === "progress" || type === "group") { values.session_start = appt.start_at.slice(11, 16); values.session_end = appt.end_at.slice(11, 16); }
   }
   noteForm(req, res, { patient, type, format, values, action: `/ehr/patients/${patient.id}/notes`,
-    appointmentId: appt ? appt.id : null, title: `New ${TYPES[type].label.toLowerCase()}` });
+    appointmentId: appt ? appt.id : null, title: `New ${TYPES[type].label.replace(/^\w/, (c) => c.toLowerCase()).replace(/^asam/, "ASAM")}` });
 });
 
 router.post("/patients/:id/notes", requirePerm("clinical:write"), (req, res) => {
@@ -469,7 +612,7 @@ router.post("/patients/:id/notes", requirePerm("clinical:write"), (req, res) => 
   if (Object.keys(form.errors).length) {
     return noteForm(req, res, { patient, type, format, values: { ...form.content, risk_level: form.risk_level, service_date: form.service_date },
       errors: form.errors, action: `/ehr/patients/${patient.id}/notes`, appointmentId: appt ? appt.id : null,
-      title: `New ${TYPES[type].label.toLowerCase()}`, status: 400 });
+      title: `New ${TYPES[type].label.replace(/^\w/, (c) => c.toLowerCase()).replace(/^asam/, "ASAM")}`, status: 400 });
   }
   const id = Number(req.db.prepare(
     `INSERT INTO notes (patient_id, appointment_id, author_id, type, format, content, risk_level, status, service_date)

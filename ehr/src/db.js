@@ -12,8 +12,34 @@ function openDb(file) {
   const db = new DatabaseSync(file);
   db.exec("PRAGMA foreign_keys = ON;");
   if (file !== ":memory:") db.exec("PRAGMA journal_mode = WAL;");
-  db.exec(fs.readFileSync(path.join(__dirname, "schema.sql"), "utf8"));
+  const schema = fs.readFileSync(path.join(__dirname, "schema.sql"), "utf8");
+  db.exec(schema);
+  migrate(db, schema);
   return db;
+}
+
+/**
+ * Upgrade older databases in place. SQLite can't ALTER a CHECK constraint, so a table
+ * whose constraint changed is rebuilt (the documented 12-step procedure, simplified).
+ */
+function migrate(db, schema) {
+  const current = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'notes'").get();
+  if (current && (current.sql.match(/'safety_plan'/g) || []).length < 2) { // both type and format checks must be current
+    const create = schema.match(/CREATE TABLE IF NOT EXISTS notes \([\s\S]*?\n\);/)[0]
+      .replace("CREATE TABLE IF NOT EXISTS notes (", "CREATE TABLE notes_new (");
+    db.exec("PRAGMA foreign_keys = OFF;");
+    try {
+      tx(db, () => {
+        db.exec(create);
+        db.exec("INSERT INTO notes_new SELECT * FROM notes;");
+        db.exec("DROP TABLE notes;");
+        db.exec("ALTER TABLE notes_new RENAME TO notes;");
+        db.exec("CREATE INDEX IF NOT EXISTS idx_notes_patient ON notes(patient_id, created_at);");
+      });
+    } finally {
+      db.exec("PRAGMA foreign_keys = ON;");
+    }
+  }
 }
 
 /** Run fn inside a transaction; rolls back on throw. */
