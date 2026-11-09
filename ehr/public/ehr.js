@@ -1,0 +1,44 @@
+/* Clinic Ready EHR. Small progressive enhancements (the app works without JS). */
+(function () {
+  "use strict";
+  // <form data-confirm="Are you sure?"> or <button data-confirm="...">
+  document.addEventListener("submit", function (e) {
+    var form = e.target;
+    var btn = e.submitter;
+    var msg = (btn && btn.getAttribute("data-confirm")) || form.getAttribute("data-confirm");
+    if (msg && !window.confirm(msg)) e.preventDefault();
+  });
+  // <button data-print> prints the page
+  document.addEventListener("click", function (e) {
+    var t = e.target.closest("[data-print]");
+    if (t) { e.preventDefault(); window.print(); }
+  });
+  // Warn before leaving a form with unsaved edits: <form data-dirty-check>
+  document.querySelectorAll("form[data-dirty-check]").forEach(function (form) {
+    var dirty = false;
+    form.addEventListener("input", function () { dirty = true; });
+    form.addEventListener("submit", function () { dirty = false; });
+    window.addEventListener("beforeunload", function (e) { if (dirty) { e.preventDefault(); e.returnValue = ""; } });
+  });
+  // Live total for questionnaires: <form data-score> sums checked radio values into [data-score-total]
+  document.querySelectorAll("form[data-score]").forEach(function (form) {
+    var out = form.querySelector("[data-score-total]");
+    function update() {
+      var sum = 0;
+      form.querySelectorAll("input[type=radio]:checked").forEach(function (r) { sum += Number(r.value) || 0; });
+      if (out) out.textContent = String(sum);
+    }
+    form.addEventListener("change", update);
+    update();
+  });
+  // Idle warning: sessions expire server-side; nudge the user after 25 minutes idle.
+  var idleMs = 25 * 60 * 1000, timer;
+  function reset() { clearTimeout(timer); timer = setTimeout(function () {
+    var bar = document.createElement("div");
+    bar.className = "alert alert--warn"; bar.setAttribute("role", "alert");
+    bar.style.cssText = "position:fixed;bottom:1rem;right:1rem;z-index:50;max-width:340px";
+    bar.textContent = "You'll be signed out soon for inactivity. Save your work.";
+    document.body.appendChild(bar);
+  }, idleMs); }
+  if (document.querySelector(".app")) { ["keydown", "click", "input"].forEach(function (ev) { document.addEventListener(ev, reset); }); reset(); }
+})();
