@@ -25,7 +25,7 @@ function openDb(file) {
 function migrate(db, schema) {
   // [table, marker that must appear `count` times in the current definition, indexes to recreate]
   const REBUILDS = [
-    ["notes", "'safety_plan'", 2, ["CREATE INDEX IF NOT EXISTS idx_notes_patient ON notes(patient_id, created_at);"]],
+    ["notes", "'supportive_housing'", 2, ["CREATE INDEX IF NOT EXISTS idx_notes_patient ON notes(patient_id, created_at);"]],
     ["assessments", "'ASRS'", 1, ["CREATE INDEX IF NOT EXISTS idx_assess_patient ON assessments(patient_id, instrument, administered_on);"]],
   ];
   // Columns added after first release (ALTER TABLE ADD COLUMN is safe and instant in SQLite).

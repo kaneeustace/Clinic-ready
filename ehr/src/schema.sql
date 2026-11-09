@@ -148,8 +148,8 @@ CREATE TABLE IF NOT EXISTS notes (
   patient_id INTEGER NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
   appointment_id INTEGER REFERENCES appointments(id) ON DELETE SET NULL,
   author_id INTEGER NOT NULL REFERENCES users(id),
-  type TEXT NOT NULL CHECK (type IN ('intake','progress','psychiatry','psychotherapy','contact','discharge','group','safety_plan','asam','roi')),
-  format TEXT NOT NULL DEFAULT 'dap' CHECK (format IN ('soap','dap','narrative','intake','group','safety_plan','asam','roi')),
+  type TEXT NOT NULL CHECK (type IN ('intake','progress','psychiatry','psychotherapy','contact','discharge','group','safety_plan','asam','roi','supportive_housing')),
+  format TEXT NOT NULL DEFAULT 'dap' CHECK (format IN ('soap','dap','narrative','intake','group','safety_plan','asam','roi','supportive_housing')),
   content TEXT NOT NULL DEFAULT '{}',       -- JSON object of section -> text
   risk_level TEXT CHECK (risk_level IN ('none','low','moderate','high') OR risk_level IS NULL),
   status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','signed')),

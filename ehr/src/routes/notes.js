@@ -28,6 +28,42 @@ const MSE = [
   ["cognition", "Cognition"], ["insight", "Insight"], ["judgment", "Judgment"],
 ];
 const MAX_TEXT = 20000;
+/** A group of checkboxes stored as an array of chosen option labels (+ optional "other" text). */
+const checks = (key, label, options, { other = false, hint = "", required = false } = {}) => ({ kind: "checks", key, label, options, other, hint, required });
+
+// Supportive housing (HUD terminology; verify against your Continuum of Care's requirements)
+const HOUSING_STATUS = [
+  { value: "", label: "Select…" },
+  { value: "unsheltered", label: "Literally homeless: unsheltered (street, vehicle, place not meant for habitation)" },
+  { value: "emergency_shelter", label: "Literally homeless: emergency shelter or safe haven" },
+  { value: "transitional", label: "Transitional housing" },
+  { value: "institution", label: "Institution (hospital, jail, treatment facility), 90 days or less" },
+  { value: "fleeing_dv", label: "Fleeing or attempting to flee domestic violence" },
+  { value: "imminent_risk", label: "Imminent risk of losing housing (within 14 days)" },
+  { value: "doubled_up", label: "Staying with family or friends (doubled up / couch surfing)" },
+  { value: "unstable_rental", label: "Renting, at risk (behind on rent, eviction notice)" },
+  { value: "stable", label: "Stably housed" },
+];
+const CHRONIC = [
+  { value: "", label: "Select…" },
+  { value: "yes_continuous", label: "Yes: homeless continuously for 12+ months" },
+  { value: "yes_episodes", label: "Yes: 4+ episodes in the last 3 years totaling 12+ months" },
+  { value: "no", label: "No / does not meet the time requirement" },
+  { value: "unknown", label: "Unknown, needs verification" },
+];
+const HOUSING_INCOME = ["Employment", "SSI", "SSDI", "TANF", "Unemployment", "VA benefits", "Child support", "Pension / retirement", "No income"];
+const HOUSING_BENEFITS = ["Medicaid", "Medicare", "SNAP", "WIC", "Housing Choice Voucher (Section 8)", "VA health care"];
+const HOUSING_DOCS = ["Photo ID", "Social Security card", "Birth certificate", "Income verification", "Disability verification (licensed professional)",
+  "Homelessness verification (third party / HMIS)", "Release of information for the Continuum of Care"];
+const HOUSING_BARRIERS = ["Prior eviction(s)", "Criminal history", "Poor or no credit / rental history", "Unpaid utility debt", "No income",
+  "Active substance use", "Untreated mental health symptoms", "Physical disability / accessibility needs", "Pets / service animal",
+  "Large household", "Sex offender registry", "Undocumented status"];
+const TENANCY_SUPPORTS = ["Budgeting and paying rent", "Landlord relationships and lease compliance", "Housekeeping and unit upkeep",
+  "Medication management", "Connecting to health care", "Substance use treatment", "Mental health treatment", "Benefits enrollment",
+  "Employment / education", "Transportation", "Community integration", "Crisis and eviction prevention"];
+const HOUSING_REFERRALS = ["Coordinated Entry (CoC) assessment", "Permanent supportive housing (PSH)", "Rapid re-housing", "Housing Choice Voucher waitlist",
+  "Emergency shelter", "Transitional housing", "Recovery housing", "Landlord / tenant legal aid", "Rental or utility assistance", "SOAR (SSI/SSDI application help)"];
+
 
 const ta = (key, label, required = false, hint = "") => ({ kind: "textarea", key, label, required, hint });
 const tx1 = (key, label, required = false, hint = "") => ({ kind: "text", key, label, required, hint });
@@ -205,6 +241,31 @@ const TYPES = {
         dt("signed_on", "Date signed", true),
         ta("revocation", "Revocation", false, "Leave blank unless the client revokes; record date and how."),
       ],
+    },
+  },
+  supportive_housing: {
+    label: "Supportive housing assessment",
+    formats: {
+      supportive_housing: [
+        sel("housing_status", "Current living situation", HOUSING_STATUS, true),
+        tx1("housing_location", "Where the client is staying now", false, "General location only; no exact address needed for unsheltered clients."),
+        ta("housing_history", "Housing history", true, "Recent housing, how housing was lost, number of episodes and length of homelessness."),
+        sel("chronic_homelessness", "Meets HUD chronic homelessness time criteria?", CHRONIC, true),
+        sel("disabling_condition", "Has a disabling condition (mental health, substance use, physical, developmental, HIV/AIDS)?", YES_NO, true),
+        ta("disability_detail", "Disabling condition details", false, "Diagnoses and functional impact relevant to housing; needed for PSH disability verification."),
+        tx1("household", "Household composition", false, "Adults, children, pets / service animal."),
+        checks("income_sources", "Income sources", HOUSING_INCOME, { other: true }),
+        tx1("monthly_income", "Approximate monthly household income", false, "e.g. $943"),
+        checks("benefits", "Benefits", HOUSING_BENEFITS, { other: true }),
+        checks("documents", "Documents on file", HOUSING_DOCS, { other: true, hint: "Tick what the client already has; the rest go in next steps." }),
+        checks("barriers", "Housing barriers", HOUSING_BARRIERS, { other: true }),
+        ta("preferences", "Housing preferences", false, "Area, accessibility, roommates, pets, proximity to services, transportation."),
+        checks("tenancy_supports", "Tenancy supports needed to obtain and keep housing", TENANCY_SUPPORTS, { other: true, required: true }),
+        ta("strengths", "Strengths and natural supports", false),
+        sel("coc_consent", "Consent to share with the Continuum of Care / HMIS on file?", YES_NO, true),
+        checks("referrals", "Referrals made", HOUSING_REFERRALS, { other: true }),
+        ta("plan", "Housing plan and next steps", true, "Who does what by when, including documents to obtain."),
+        RISK],
     },
   },
   discharge: {
@@ -416,6 +477,10 @@ function readForm(body, type, format, prev = {}) {
       if (content.session_end && !isTime(content.session_end)) errors.session_end = "Use HH:MM.";
       if (!errors.session_start && !errors.session_end && content.session_start && content.session_end &&
           content.session_end <= content.session_start) errors.session_end = "End time must be after start time.";
+    } else if (f.kind === "checks") {
+      const chosen = arr(body[f.key]);
+      content[f.key] = f.options.filter((o) => chosen.includes(o));
+      if (f.other) content[`${f.key}_other`] = str(body[`${f.key}_other`]).slice(0, 500);
     } else if (f.kind === "interventions") {
       const chosen = arr(body.interventions);
       content.interventions = INTERVENTIONS.filter((i) => chosen.includes(i));
@@ -451,6 +516,9 @@ function signErrors(note, { planObjectiveCount = 0, addressedCount = 0 } = {}) {
     if (f.kind === "session") {
       if (empty(c.session_start)) errors.session_start = "Session start time is required.";
       if (empty(c.session_end)) errors.session_end = "Session end time is required.";
+    }
+    if (f.kind === "checks" && f.required && empty(c[f.key]) && empty(c[`${f.key}_other`])) {
+      errors[f.key] = `${f.label}: select at least one.`;
     }
     if (f.kind === "interventions" && empty(c.interventions) && empty(c.interventions_other)) {
       errors.interventions = "Select at least one intervention used.";
@@ -588,6 +656,15 @@ function fieldInputs(type, format, v, errors) {
         <label>Session start <span class="hint">(required to sign)</span><input type="time" name="session_start" value="${v.session_start || ""}">${errText(errors, "session_start")}</label>
         <label>Session end <span class="hint">(required to sign)</span><input type="time" name="session_end" value="${v.session_end || ""}">${errText(errors, "session_end")}</label>`;
     }
+    if (f.kind === "checks") {
+      const chosen = v[f.key] || [];
+      return html`<fieldset class="span-all"><legend>${f.label}${f.required ? html` <span class="hint">(required to sign)</span>` : ""}</legend>
+        ${f.hint ? html`<p class="hint">${f.hint}</p>` : ""}
+        <div class="row">${f.options.map((o) => html`
+          <label class="check"><input type="checkbox" name="${f.key}" value="${o}" ${chosen.includes(o) ? html`checked` : ""}> ${o}</label>`)}</div>
+        ${f.other ? html`<label>Other <input type="text" name="${f.key}_other" value="${v[`${f.key}_other`] || ""}" maxlength="500"></label>` : ""}
+        ${errText(errors, f.key)}</fieldset>`;
+    }
     if (f.kind === "interventions") {
       const sel = v.interventions || [];
       return html`<fieldset class="span-all"><legend>Interventions used</legend>
@@ -686,6 +763,10 @@ function noteBody(note) {
     if (f.kind === "session") {
       return section("Session time", c.session_start || c.session_end
         ? `${fmtTime(`0000-00-00T${c.session_start || ""}`) || "?"} to ${fmtTime(`0000-00-00T${c.session_end || ""}`) || "?"}` : "");
+    }
+    if (f.kind === "checks") {
+      const list = [...(c[f.key] || []), ...(c[`${f.key}_other`] ? [c[`${f.key}_other`]] : [])];
+      return section(f.label, list.join(", "));
     }
     if (f.kind === "interventions") {
       const list = [...(c.interventions || []), ...(c.interventions_other ? [c.interventions_other] : [])];
