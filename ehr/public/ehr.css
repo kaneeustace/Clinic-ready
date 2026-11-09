@@ -264,3 +264,26 @@ details > summary { cursor: pointer; font-weight: 600; color: var(--primary); }
 @media (min-width: 960px) { .app { grid-template-columns: 248px minmax(0, 1fr); } }
 .sidebar, .sidebar nav { min-width: 0; }
 .login form + .alert { margin-top: 1rem; }
+
+/* Notes: treatment plan objectives addressed (golden thread) */
+.obj-list { display: grid; gap: .6rem; }
+.obj-item { border: 1px solid var(--border); border-radius: var(--radius); padding: .6rem .8rem; }
+.obj-path { margin: 0 0 .35rem; font-size: .9em; }
+.obj-fields { display: grid; grid-template-columns: minmax(10rem, 14rem) 1fr; gap: .5rem .8rem; margin-top: .45rem; padding-left: 1.6rem; }
+@media (max-width: 640px) { .obj-fields { grid-template-columns: 1fr; padding-left: 0; } }
+/* Notes: ASAM edition switch. Server sets `hidden` for the initial edition; :has() follows the select live. */
+form:has(#asam_edition option[value="4"]:checked) span.asam-ed4,
+form:has(#asam_edition option[value="3"]:checked) span.asam-ed3 { display: inline; }
+form:has(#asam_edition option[value="4"]:checked) option.asam-ed4,
+form:has(#asam_edition option[value="3"]:checked) option.asam-ed3 { display: block; }
+form:has(#asam_edition option[value="4"]:checked) .asam-ed3,
+form:has(#asam_edition option[value="3"]:checked) .asam-ed4 { display: none; }
+
+/* iOS Safari: date/time inputs ignore width:100% and center their value */
+input[type="date"], input[type="time"], input[type="datetime-local"] {
+  -webkit-appearance: none; appearance: none; display: block; min-width: 0; max-width: 100%;
+  min-height: 2.6rem; text-align: left; background-color: #fff;
+}
+input[type="date"]::-webkit-date-and-time-value, input[type="time"]::-webkit-date-and-time-value,
+input[type="datetime-local"]::-webkit-date-and-time-value { text-align: left; margin: 0; }
+label, fieldset, .form-grid > * { min-width: 0; }
