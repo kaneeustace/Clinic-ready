@@ -197,6 +197,7 @@ function loginPage(req, { error, email = "" } = {}) {
             Password for all accounts: <code>${require("./seed").DEMO_PASSWORD}</code><br>
             therapist@example.com · prescriber@example.com · frontdesk@example.com · billing@example.com · admin@example.com
           </div>` : ""}
+          <p class="muted small">Forgot your password? Ask an administrator to reset it under Admin → Users. The clinic's owner can also reset an admin account from the server (<code>npm run reset-admin</code>).</p>
           <p class="muted small">Authorized personnel only. All access to patient records is logged.</p>
         </div>
       </div>`,

@@ -14,7 +14,8 @@
     "test": "node --no-warnings --test \"test/**/*.test.js\"",
     "backup": "node --no-warnings scripts/backup.js",
     "backup:verify": "node --no-warnings scripts/verify-backup.js",
-    "backup:restore": "node --no-warnings scripts/restore-backup.js"
+    "backup:restore": "node --no-warnings scripts/restore-backup.js",
+    "reset-admin": "node --no-warnings scripts/reset-admin.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.6.0",
