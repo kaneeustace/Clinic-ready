@@ -494,9 +494,9 @@ function chargeForm(req, res, patient, { values = {}, errors = {}, appt = null, 
     </form>`, { title: "New charge" }));
 }
 
-function loadAppt(db, patient, raw) {
-  if (raw === undefined || raw === null || raw === "") return { appt: null };
-  const id = toInt(raw);
+function loadAppt(db, patient, rawId) {
+  if (rawId === undefined || rawId === null || rawId === "") return { appt: null };
+  const id = toInt(rawId);
   const appt = id ? db.prepare("SELECT * FROM appointments WHERE id = ?").get(id) : null;
   if (!appt || appt.patient_id !== patient.id) return { error: "That appointment does not belong to this patient." };
   return { appt };
@@ -556,17 +556,14 @@ router.post("/patients/:id/charges", write, (req, res) => {
 
   if (Object.keys(errors).length) return chargeForm(req, res, patient, { values, errors, appt, status: 400 });
 
-  const id = tx(db, () => {
+  tx(db, () => {
     const r = db.prepare(
       `INSERT INTO charges (patient_id, appointment_id, date_of_service, cpt_code, modifier, units, fee_cents, diagnosis_codes,
         rendering_provider_id, bill_to, status, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unbilled', ?)`)
       .run(patient.id, appt ? appt.id : null, values.date_of_service, values.cpt_code, values.modifier || null, units, feeCents,
         codes.join(","), prov.id, values.bill_to, req.user.id);
-    const newId = Number(r.lastInsertRowid);
-    audit(req, "create", "charge", newId, patient.id, appt ? "from appointment" : "manual");
-    return newId;
+    audit(req, "create", "charge", Number(r.lastInsertRowid), patient.id, appt ? "from appointment" : "manual");
   });
-  void id;
   req.flash("success", `Charge created for ${money(feeCents)}.`);
   res.redirect(`/ehr/patients/${patient.id}/billing`);
 });

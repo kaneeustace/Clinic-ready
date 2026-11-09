@@ -25,7 +25,7 @@ const { can } = require("../permissions");
 const { audit } = require("../audit");
 const { tx } = require("../db");
 const {
-  html, raw, page, chartPage, notFound, csrfField, select, badge, getPatient,
+  html, raw, chartPage, notFound, csrfField, select, badge, getPatient,
   today, addDays, fmtDate, fmtTimestamp, fmtDateTime, humanize,
 } = require("../views");
 
@@ -243,8 +243,7 @@ function renderPlanTab(req, patient, opts = {}) {
      WHERE tp.patient_id = ? ORDER BY tp.created_at DESC, tp.id DESC`).all(patient.id);
   const active = plans.find((p) => p.status === "active") || null;
   const draft = plans.find((p) => p.status === "draft") || null;
-  let plan = opts.plan ? plans.find((p) => p.id === opts.plan.id) : (active || draft);
-  if (!plan && opts.plan) plan = null;
+  const plan = opts.plan ? plans.find((p) => p.id === opts.plan.id) : (active || draft);
   const writable = can(req.user, "clinical:write");
   const base = `/ehr/patients/${patient.id}`;
   const t = today();
@@ -825,8 +824,8 @@ router.post("/patients/:id/measures", WRITE, (req, res) => {
   const responses = [];
   const missing = [];
   def.items.forEach((_, i) => {
-    const raw = req.body[`q${i + 1}`];
-    if (typeof raw === "string" && /^[0-3]$/.test(raw)) responses.push(Number(raw));
+    const rv = req.body[`q${i + 1}`];
+    if (typeof rv === "string" && /^[0-3]$/.test(rv)) responses.push(Number(rv));
     else { responses.push(undefined); missing.push(i + 1); }
   });
   if (missing.length) errors.push(`Answer every item with a value from 0 to 3 (missing or invalid: item${missing.length > 1 ? "s" : ""} ${missing.join(", ")}).`);
@@ -861,4 +860,3 @@ router.post("/patients/:id/measures", WRITE, (req, res) => {
 });
 
 module.exports = { router, scoreInstrument, INSTRUMENTS };
-void page;
