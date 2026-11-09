@@ -352,3 +352,12 @@ dl.facts.plan-facts { grid-template-columns: minmax(110px, 34%) minmax(0, 1fr); 
 .dx-chip { display: inline-flex; gap: .3rem; align-items: baseline; padding: .18rem .6rem; border-radius: 999px; background: var(--info-bg); color: #1d3f9e; font-size: .78rem; border: 1px solid #cddaf9; max-width: 100%; }
 .dx-chip strong { font-weight: 700; }
 .dx-chip--primary { background: var(--primary); color: #fff; border-color: var(--primary); }
+
+/* Treatment plan builder steps */
+.build-card { border-color: #cddaf9; }
+.build-steps { list-style: none; margin: 0 0 .5rem; padding: 0; display: grid; gap: .5rem; }
+.build-step { display: flex; align-items: center; gap: .75rem; padding: .6rem .75rem; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
+.build-step__num { flex: none; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: .85rem; background: var(--primary-light); color: var(--primary-dark); }
+.build-step__body { flex: 1; min-width: 0; display: grid; }
+.build-step--done { background: var(--surface-2); }
+.build-step--done .build-step__num { background: var(--good-bg); color: var(--good); }

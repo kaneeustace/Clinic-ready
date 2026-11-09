@@ -409,6 +409,42 @@ function dxList(plan) {
     : muted("No active diagnoses were on the problem list when this plan was created.");
 }
 
+/** Step-by-step guide shown at the top of an editable draft. */
+function builderSteps(plan, tree, pAct) {
+  const probs = tree.problems;
+  const lastProblem = probs[probs.length - 1];
+  const goals = probs.flatMap((p) => p.goals);
+  const lastGoal = goals[goals.length - 1];
+  const objs = goals.flatMap((g) => g.objectives);
+  const lastObj = objs[objs.length - 1];
+  const ivs = objs.flatMap((o) => o.interventions);
+  const dx = planDx(plan).length;
+  const step = (n, done, title, hint, btn) => html`
+    <li class="build-step${done ? " build-step--done" : ""}">
+      <span class="build-step__num" aria-hidden="true">${done ? "✓" : n}</span>
+      <div class="build-step__body"><strong>${title}</strong><span class="hint">${hint}</span></div>
+      ${btn || ""}</li>`;
+  const link = (href, label, primary) => html`<a class="btn btn--sm${primary ? " btn--primary" : ""}" href="${href}">${label}</a>`;
+  // The first unfinished step gets the primary button.
+  const next = !dx ? 1 : !probs.length ? 2 : !goals.length ? 3 : !objs.length ? 4 : !ivs.length ? 5 : 6;
+  return html`
+    <section class="card build-card no-print" aria-labelledby="build-h">
+      <h2 id="build-h">Build this plan</h2>
+      <ol class="build-steps">
+        ${step(1, dx > 0, "Diagnoses", dx ? `${dx} on this plan` : "Add the diagnoses this plan treats", link("#pl-dx", dx ? "Change" : "Add diagnosis", next === 1))}
+        ${step(2, probs.length > 0, "Problem", probs.length ? `${probs.length} added` : "What's wrong and how it shows up", link(`${pAct}/problems/new`, "+ Add problem", next === 2))}
+        ${step(3, goals.length > 0, "Goal", goals.length ? `${goals.length} added` : "The client's goal, in their own words",
+          lastProblem ? link(`${pAct}/goals/new?parent=${lastProblem.id}`, "+ Add goal", next === 3) : html`<span class="hint">Add a problem first</span>`)}
+        ${step(4, objs.length > 0, "Objective", objs.length ? `${objs.length} added` : "Measurable step with a target and date",
+          lastGoal ? link(`${pAct}/objectives/new?parent=${lastGoal.id}`, "+ Add objective", next === 4) : html`<span class="hint">Add a goal first</span>`)}
+        ${step(5, ivs.length > 0, "Intervention", ivs.length ? `${ivs.length} added` : "What you'll do, how often, and who",
+          lastObj ? link(`${pAct}/interventions/new?parent=${lastObj.id}`, "+ Add intervention", next === 5) : html`<span class="hint">Add an objective first</span>`)}
+        ${step(6, false, "Sign and activate", "Your signature and the client's, then activate", link(`${pAct}/sign`, "Signatures & activation", next === 6))}
+      </ol>
+      ${probs.length ? html`<p class="hint"><a href="#plan-tree">See the full plan below</a> to add more goals, objectives or interventions under any problem.</p>` : ""}
+    </section>`;
+}
+
 /** Draft-only diagnosis editor: remove / make primary, plus a dropdown to add. */
 function dxEditor(req, plan, patient, pAct) {
   const dx = planDx(plan);
@@ -634,6 +670,7 @@ function renderPlanTab(req, patient, opts = {}) {
   const actions = html`
     <div class="row no-print">
       ${writable && isDraft ? html`
+        ${editable ? html`<a class="btn btn--primary" href="${pAct}/problems/new">+ Add problem</a>` : ""}
         ${editable ? html`<a class="btn" href="${pAct}/edit">Edit plan details</a>` : ""}
         <a class="btn btn--primary" href="${pAct}/sign">Signatures &amp; activation</a>
         ${editable ? html`<form method="post" action="${pAct}/discard" class="inline-form" data-confirm="Discard this draft? Its content will be deleted.">
@@ -665,6 +702,7 @@ function renderPlanTab(req, patient, opts = {}) {
       ${actions}
     </div>
     ${errorList(opts.errors)}
+    ${editable ? builderSteps(plan, tree, pAct) : ""}
     ${!active ? html`<div class="alert alert--warn" role="status"><strong>No active treatment plan.</strong> Payers expect a signed plan before ongoing therapy.</div>` : ""}
     ${!isDraft && !isActive
       ? html`<div class="alert alert--info" role="status">You are viewing version ${plan.version} (${humanize(plan.status)}), read-only.${active || draft ? html` <a href="${base}/treatment-plan">View the current plan</a>` : ""}</div>` : ""}
@@ -712,7 +750,7 @@ function renderPlanTab(req, patient, opts = {}) {
         ${SUD_FIELDS.map(([k, label]) => html`<dt>${label}</dt><dd>${textOr(plan[k])}</dd>`)}
       </dl></section>` : ""}
 
-    <div class="page-head plan-tree-head">
+    <div class="page-head plan-tree-head" id="plan-tree">
       <h2>Problems, goals, objectives and interventions</h2>
       ${editable ? html`<a class="btn btn--primary btn--sm no-print" href="${pAct}/problems/new">+ Add problem</a>` : ""}
     </div>
