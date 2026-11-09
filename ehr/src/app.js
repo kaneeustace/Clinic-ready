@@ -23,6 +23,7 @@ function securityHeaders(req, res, next) {
     "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
     "Cross-Origin-Opener-Policy": "same-origin",
   });
+  if (process.env.EHR_DEMO === "1") res.set("X-Robots-Tag", "noindex, nofollow"); // keep the demo out of search engines
   if (process.env.NODE_ENV === "production") res.set("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
   next();
 }

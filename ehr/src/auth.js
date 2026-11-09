@@ -165,6 +165,12 @@ function loginPage(req, { error, email = "" } = {}) {
             <label>Password <input type="password" name="password" autocomplete="current-password" required></label>
             <button class="btn btn--primary" type="submit">Sign in</button>
           </form>
+          ${process.env.EHR_DEMO === "1" ? html`
+          <div class="alert alert--info small">
+            <strong>Demo site with fictional patients.</strong> Never enter real information here.<br>
+            Password for all accounts: <code>${require("./seed").DEMO_PASSWORD}</code><br>
+            therapist@example.com · prescriber@example.com · frontdesk@example.com · billing@example.com · admin@example.com
+          </div>` : ""}
           <p class="muted small">Authorized personnel only. All access to patient records is logged.</p>
         </div>
       </div>`,

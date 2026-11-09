@@ -33,3 +33,25 @@ services:
         sync: false
       - key: EHR_ADMIN_PASSWORD
         sync: false
+
+  # Demo copy: fictional staff + patients, free instance, no disk.
+  # The database resets to fresh sample data whenever the instance restarts.
+  # The login page lists the demo accounts. Never enter real information here.
+  - type: web
+    name: clinic-ready-demo
+    runtime: node
+    plan: free
+    rootDir: ehr
+    buildCommand: npm ci --omit=dev
+    startCommand: npm start
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: TRUST_PROXY
+        value: "1"
+      - key: EHR_DEMO
+        value: "1"
+      - key: EHR_TZ
+        value: America/New_York
