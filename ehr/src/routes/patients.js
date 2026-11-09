@@ -754,13 +754,25 @@ function renderOverview(req, res, patient, state = null, status = 200) {
         : html`<p class="muted">No signed notes yet.</p>`}
     </section>` : "";
 
+  // Patient rights (records.js): right of access + accounting of disclosures.
+  const recordsCard = clinical ? html`
+    <section class="card" aria-labelledby="rec-h">
+      <div class="card__head"><h2 id="rec-h">Records &amp; disclosures</h2></div>
+      <ul class="list-plain">
+        <li><a href="/ehr/patients/${pid}/records">Generate record copy</a> <span class="muted small">(right of access)</span></li>
+        <li><a href="/ehr/patients/${pid}/disclosures">Disclosure log</a> · ${db.prepare("SELECT COUNT(*) AS n FROM disclosures WHERE patient_id = ?").get(pid).n} recorded</li>
+        <li><a href="/ehr/patients/${pid}/disclosures/accounting">Accounting of disclosures</a></li>
+      </ul>
+    </section>` : "";
+
   res.status(status).send(chartPage(req, patient, "overview", html`
     <div class="grid grid--2">${demographics}${contact}</div>
     ${allergyCard}
     ${dxCard}
     ${medCard}
     ${insurance}
-    <div class="grid grid--2">${apptCard}${notesCard}</div>`));
+    <div class="grid grid--2">${apptCard}${notesCard}</div>
+    ${recordsCard}`));
 }
 
 const RELATIONS = [
