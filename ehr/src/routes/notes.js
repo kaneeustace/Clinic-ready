@@ -10,9 +10,10 @@ const { can } = require("../permissions");
 const { audit } = require("../audit");
 const { tx } = require("../db");
 const { reviewNote } = require("../ai-review");
+const { isAhcccs } = require("../payers");
 const {
   html, raw, page, chartPage, notFound, csrfField, select, badge, getPatient, patientName,
-  today, fmtDate, fmtTime, fmtTimestamp, humanize,
+  today, nowLocal, fmtDate, fmtTime, fmtTimestamp, humanize, TZ,
 } = require("../views");
 
 const router = express.Router();
@@ -135,16 +136,119 @@ const CONSENT_METHODS = [
   { value: "signed_electronic", label: "Signed electronically" }, { value: "guardian", label: "Signed by parent / legal guardian" },
 ];
 
+/* ------------------------------------------------------------------ */
+/* AHCCCS (Arizona Medicaid) encounter and assessment fields          */
+/* (docs/ahcccs-spec.md §A/§B). Shown for every client as good        */
+/* practice; `ahcccs: true` makes a field required to sign only for   */
+/* AHCCCS members (payers.isAhcccs), optionally only `when(content)`. */
+/* ------------------------------------------------------------------ */
+const ah = (f, extra = {}) => ({ ...f, ahcccs: true, enc: true, ...extra });
+const heading = (key, label, hint = "") => ({ kind: "heading", key, label, hint });
+const SERVICE_TYPES = [
+  { value: "", label: "Select…" }, { value: "individual", label: "Individual" },
+  { value: "family_present", label: "Family (member present)" }, { value: "family_absent", label: "Family (member absent)" },
+  { value: "group", label: "Group" },
+];
+const DX_STATUS = [{ value: "", label: "Select…" }, { value: "new", label: "New" }, { value: "continuing", label: "Continuing from current assessment" }];
+const POS_OPTIONS = [
+  { value: "", label: "Select…" }, { value: "11", label: "11 Office" }, { value: "12", label: "12 Home" },
+  { value: "03", label: "03 School" }, { value: "99", label: "99 Other (describe)" },
+];
+const TELE_MODALITIES = [
+  { value: "", label: "Select…" }, { value: "in_person", label: "None (in person)" },
+  { value: "audio_video", label: "Telehealth: audio-video (GT)" }, { value: "audio_only", label: "Telehealth: audio-only (FQ)" },
+];
+const INTERPRETER = [
+  { value: "", label: "Select…" }, { value: "not_needed", label: "Not needed" },
+  { value: "offered_declined", label: "Offered and declined" }, { value: "provided", label: "Provided" },
+];
+const SMI_SA = [
+  { value: "", label: "Select…" }, { value: "not_smi", label: "Not applicable (not SMI-designated)" },
+  { value: "no", label: "SMI: no special-assistance need" }, { value: "yes", label: "SMI: needs special assistance" },
+];
+const LOC_TOOLS = [
+  { value: "", label: "Select…" }, { value: "calocus", label: "CALOCUS (ages 6–17)" },
+  { value: "asam", label: "ASAM (adult with substance use disorder; see the ASAM note)" }, { value: "none", label: "Not applicable" },
+];
+const isTele = (c) => c.telehealth_modality === "audio_video" || c.telehealth_modality === "audio_only";
+
+/** Encounter fields shown near the top of progress / group / psychiatry / contact notes. */
+function encounterHead(type) {
+  const counseling = type === "progress" || type === "group";
+  const f = [
+    heading("_enc", "Encounter details (AHCCCS)", "Good practice for every client; required to sign for AHCCCS members."),
+    ah(sel("service_type", "Service type", SERVICE_TYPES)),
+    ah(tx1("dx_addressed", "Diagnosis addressed"), { ui: "dx" }),
+    ah(sel("dx_status", "Diagnosis status", DX_STATUS)),
+    ah(sel("pos", "Place of service (member's location)", POS_OPTIONS, false, "For telehealth, where the member was. AHCCCS does not use POS 02/10.")),
+    ah(tx1("pos_other", "Other location"), { when: (c) => c.pos === "99" }),
+    ah(sel("telehealth_modality", "Telehealth modality", TELE_MODALITIES)),
+    ah(tx1("member_location", "Member's location during telehealth", false, "e.g. Home, school, car (parked)."), { when: isTele }),
+    ah(sel("telehealth_consent", "Telehealth informed consent on file?", YES_NO), { when: isTele }),
+    ah(ta("audio_only_reason", "Why video wasn't available (audio-only)", false, "Audio-only sessions must also run over 10 minutes."),
+      { when: (c) => c.telehealth_modality === "audio_only", noClone: true }),
+    ah(tx1("participants", "Participants present", false, "Names and roles, e.g. Member; mother (guardian); case manager.")),
+    ah(tx1("preferred_language", "Preferred language")),
+    ah(sel("interpreter", "Interpreter", INTERPRETER)),
+    ah(tx1("interpreter_name", "Interpreter name / ID"), { when: (c) => c.interpreter === "provided" }),
+  ];
+  if (type === "group") f.push(ah(tx1("group_count", "Number of members in the group"), { ui: "number" }));
+  if (counseling) {
+    f.push(ah(ta("session_problem", "Presenting problem for this session", false, "Reason for the session, as listed in the service plan.")),
+      ah(tx1("brief_mse", "Brief mental status / appearance")),
+      ah(ta("screener_results", "Screener results", false, "Latest PHQ-9 / GAD-7 etc. Prefilled from the chart when available; edit as needed."), { noClone: true }));
+  }
+  return f;
+}
+/** Encounter fields shown after the narrative. */
+function encounterTail(type) {
+  const f = [
+    ah(ta("member_response", "Member's individualized response", false, "How this member responded to today's interventions, in specifics.")),
+    { ...ta("coordination_of_care", "Coordination of care", false, "Contact with the PCP or other providers, if any."), enc: true },
+  ];
+  if (type === "progress" || type === "group") {
+    f.push(ah(ta("long_session_justification", "Justification for a session over 60 minutes"),
+      { when: (c) => (sessionMinutes(c) || 0) > 60, noClone: true }));
+  }
+  return f;
+}
+/** Session start/stop times that are required to sign only for AHCCCS members. */
+const SESSION_AH = { kind: "session", key: "session", ahcccs: true };
+
+const INTAKE_AHCCCS = [
+  heading("_dom", "AHCCCS assessment domains (AMPM 320-O)", "Required to sign for AHCCCS members."),
+  ah(ta("strengths_needs", "Member and family strengths and needs")),
+  ah(ta("trauma_history", "Trauma history")),
+  ah(ta("family_history", "Family behavioral health and medical history")),
+  ah(ta("developmental_history", "Developmental history")),
+  ah(ta("criminal_justice", "Criminal justice history / pending litigation")),
+  ah(ta("legal_status", "Legal status", false, "Custody, guardian, decision-maker, capacity.")),
+  ah(ta("sdoh_housing", "Social determinants: housing")),
+  ah(ta("sdoh_education", "Social determinants: education / vocation")),
+  ah(ta("sdoh_employment", "Social determinants: employment")),
+  ah(ta("sdoh_social_cultural", "Social determinants: social and cultural")),
+  ah(ta("resources", "Public and private resources")),
+  ah(ta("language_communication", "Language and communication")),
+  ah(sel("smi_special_assistance", "SMI special-assistance need", SMI_SA)),
+  ah(ta("services_to_be_provided", "Services to be provided")),
+  ah(ta("further_evaluation", "Need for further or specialty evaluation")),
+  ah(sel("loc_tool", "Level-of-care tool", LOC_TOOLS, false, "CALOCUS for ages 6–17 (intake, then every 6 months); ASAM for adults with a substance use disorder.")),
+  ah(tx1("calocus_score", "CALOCUS composite score"), { when: (c) => c.loc_tool === "calocus" }),
+  ah(tx1("calocus_level", "CALOCUS level of care"), { when: (c) => c.loc_tool === "calocus" }),
+  ah(sel("shared_pcp", "Assessment shared with PCP / Health Home?", YES_NO)),
+  ah(dt("shared_pcp_date", "Date shared with PCP / Health Home"), { when: (c) => c.shared_pcp === "yes" }),
+];
+
 const TYPES = {
   progress: {
     label: "Progress note",
     formats: {
-      dap: [SESSION, ta("data", "Data", true, "What the client said and did; observations."),
+      dap: [SESSION, ...encounterHead("progress"), ta("data", "Data", true, "What the client said and did; observations."),
         ta("assessment", "Assessment", true, "Clinical interpretation and progress toward goals."),
-        ta("plan", "Plan", true, "Next steps, homework, next session."), INTERV, RISK],
-      soap: [SESSION, ta("subjective", "Subjective", true, "Client's report in their words."),
+        ta("plan", "Plan", true, "Next steps, homework, next session."), INTERV, ...encounterTail("progress"), RISK],
+      soap: [SESSION, ...encounterHead("progress"), ta("subjective", "Subjective", true, "Client's report in their words."),
         ta("objective", "Objective", true, "Observations, measures, presentation."),
-        ta("assessment", "Assessment", true), ta("plan", "Plan", true), INTERV, RISK],
+        ta("assessment", "Assessment", true), ta("plan", "Plan", true), INTERV, ...encounterTail("progress"), RISK],
     },
   },
   intake: {
@@ -154,16 +258,16 @@ const TYPES = {
         ta("psychiatric_history", "Psychiatric history"), ta("substance_use", "Substance use"),
         ta("medical_history", "Medical history"), ta("family_social_history", "Family / social history"),
         MSE_F, RISK, ta("diagnostic_impression", "Diagnostic impression", true),
-        ta("recommendations", "Recommendations", true)],
+        ta("recommendations", "Recommendations", true), ...INTAKE_AHCCCS],
     },
   },
   psychiatry: {
     label: "Psychiatry note",
     formats: {
-      soap: [ta("chief_complaint", "Chief complaint", true), ta("interval_history", "Interval history", true),
-        ta("medication_response", "Medication response / side effects"), MSE_F, RISK,
+      soap: [SESSION_AH, ...encounterHead("psychiatry"), ta("chief_complaint", "Chief complaint", true), ta("interval_history", "Interval history", true),
+        ta("medication_response", "Medication response / side effects"), { ...MSE_F, ahcccs: true }, RISK,
         ta("assessment", "Assessment", true), ta("plan_medications", "Plan: medication changes", true),
-        ta("plan_labs", "Plan: labs"), ta("plan_followup", "Plan: follow-up", true)],
+        ta("plan_labs", "Plan: labs"), ta("plan_followup", "Plan: follow-up", true), ...encounterTail("psychiatry")],
     },
   },
   psychotherapy: {
@@ -174,17 +278,17 @@ const TYPES = {
     label: "Contact note",
     formats: {
       narrative: [tx1("contact_with", "Contact with / method", true, "e.g. Patient by phone; collateral (parent) by phone."),
-        ta("narrative", "Narrative", true)],
+        SESSION_AH, ...encounterHead("contact"), ta("narrative", "Narrative", true), ...encounterTail("contact")],
     },
   },
   group: {
     label: "Group note",
     formats: {
       group: [tx1("group_name", "Group name", true, "e.g. DBT skills group, Anxiety group."), tx1("group_topic", "Session topic", true),
-        SESSION, tx1("attendance", "Attendance", false, "e.g. 7 of 9 members present. Don't name other members."),
+        SESSION, ...encounterHead("group"), tx1("attendance", "Attendance", false, "e.g. 7 of 9 members present. Don't name other members."),
         ta("group_content", "Group content", true, "What was covered this session."),
         ta("participation", "Client participation and response", true, "This client's engagement, contributions and response."),
-        INTERV, ta("plan", "Plan", true), RISK],
+        INTERV, ta("plan", "Plan", true), ...encounterTail("group"), RISK],
     },
   },
   safety_plan: {
@@ -296,6 +400,118 @@ const isDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(new Date(s + "T12:
 const isTime = (s) => /^([01]\d|2[0-3]):[0-5]\d$/.test(s);
 const parseContent = (n) => { try { return JSON.parse(n.content || "{}") || {}; } catch { return {}; } };
 const userLine = (u) => (u ? `${u.name}${u.credentials ? `, ${u.credentials}` : ""}` : "Unknown");
+const DX_CODE = /^[A-Z][0-9][0-9A-Z](\.[0-9A-Z]{1,4})?$/;
+/** Documented session minutes from content.session_start / session_end, or null. */
+function sessionMinutes(c) {
+  if (!isTime(c.session_start || "") || !isTime(c.session_end || "")) return null;
+  const [h1, m1] = c.session_start.split(":").map(Number);
+  const [h2, m2] = c.session_end.split(":").map(Number);
+  return h2 * 60 + m2 - (h1 * 60 + m1);
+}
+
+/* ------------------------------------------------------------------ */
+/* AHCCCS helpers: member context, late entry, cloned notes, co-sign  */
+/* ------------------------------------------------------------------ */
+const LATE_HOURS = 48;
+const COSIGN_HOURS = 72;
+const COSIGN_PREFIX = "Co-signed by licensed BHP";
+/** Independently or associate-licensed BHP/BHMP credentials (verify against your staff roster). */
+const LICENSED_RE = /\b(LCSW|LPC|LMFT|LISAC|LMSW|LAC|LAMFT|LASAC|PSYD|PHD|MD|DO|NP|PMHNP|DNP|PA-C|APRN)\b/i;
+/** Unlicensed staff whose assessments need a licensed BHP's review and signature within 72 hours (AMPM 320-O). */
+const needsCosign = (credentials) => !LICENSED_RE.test(String(credentials || ""));
+const isLicensed = (credentials) => LICENSED_RE.test(String(credentials || ""));
+
+function ageOn(dob, ymd) {
+  if (!dob || !ymd) return null;
+  const [y1, m1, d1] = String(dob).slice(0, 10).split("-").map(Number);
+  const [y2, m2, d2] = String(ymd).slice(0, 10).split("-").map(Number);
+  if (!y1 || !y2) return null;
+  return y2 - y1 - (m2 < m1 || (m2 === m1 && d2 < d1) ? 1 : 0);
+}
+
+/** AHCCCS flag, age on the date of service and SUD diagnosis presence, for sign-time rules. */
+function memberContext(db, patient, serviceDate) {
+  const ahcccs = isAhcccs(db, patient.id);
+  const dx = db.prepare("SELECT icd10_code FROM diagnoses WHERE patient_id = ? AND status = 'active'").all(patient.id);
+  return { ahcccs, age: ageOn(patient.dob, serviceDate || today()), hasSud: dx.some((d) => /^F1[0-689]/i.test(d.icd10_code)) };
+}
+
+/** Is signing now more than 48 hours after the service ended (service date + end time, else end of day)? */
+function lateInfo(note) {
+  if (!note.service_date || !isDate(note.service_date)) return { late: false, hours: 0 };
+  const c = parseContent(note);
+  const end = `${note.service_date}T${isTime(c.session_end || "") ? c.session_end : "23:59"}`;
+  const hours = (Date.parse(`${nowLocal()}:00Z`) - Date.parse(`${end}:00Z`)) / 3.6e6;
+  return { late: hours > LATE_HOURS, hours: Math.floor(hours) };
+}
+
+/* Cloned-note detection (AMPM 940 2.h; denial edit MD435): normalized token Jaccard of the narrative. */
+const CLONE_TYPES = ["progress", "group", "psychiatry", "contact", "intake", "asam", "discharge"];
+const CLONE_THRESHOLD = 0.9;
+function narrativeTokens(note) {
+  const c = parseContent(note);
+  const text = fieldsFor(note.type, note.format).filter((f) => f.kind === "textarea" && !f.noClone).map((f) => c[f.key] || "")
+    .concat(c.risk_narrative || "").join(" ").toLowerCase()
+    .replace(/\b\d{1,4}[/.-]\d{1,2}[/.-]\d{1,4}\b/g, " ")          // dates
+    .replace(/\b\d{1,2}:\d{2}(\s*[ap]\.?m\.?)?/g, " ")               // times
+    .replace(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(,?\s*\d{4})?/g, " ");
+  return new Set(text.match(/[a-z0-9']+/g) || []);
+}
+function jaccard(a, b) {
+  if (!a.size || !b.size) return 0;
+  let inter = 0;
+  for (const x of a) if (b.has(x)) inter++;
+  return inter / (a.size + b.size - inter);
+}
+/** The most similar other signed note of the same type, same patient, same author (>= 90%), or null. */
+function findClone(db, note) {
+  if (!CLONE_TYPES.includes(note.type)) return null;
+  const mine = narrativeTokens(note);
+  if (!mine.size) return null;
+  let best = null;
+  const others = db.prepare(`SELECT id, type, format, content, service_date FROM notes
+    WHERE patient_id = ? AND author_id = ? AND type = ? AND id <> ? AND status = 'signed'`).all(note.patient_id, note.author_id, note.type, note.id);
+  for (const o of others) {
+    const sim = jaccard(mine, narrativeTokens(o));
+    if (sim >= CLONE_THRESHOLD && (!best || sim > best.similarity)) best = { note_id: o.id, service_date: o.service_date, similarity: sim };
+  }
+  return best;
+}
+const cloneMessage = (m) => `This note's narrative is ${m.similarity >= 0.999 ? "identical" : `${Math.round(m.similarity * 100)}% similar`} to your note of ${fmtDate(m.service_date)} for this client. ` +
+  "AHCCCS prohibits cloned documentation (AMPM 940; denial edit MD435). Describe what happened in this session.";
+
+/** Co-signature (licensed BHP review of an unlicensed clinician's assessment) for a signed intake note. */
+function cosignStatus(db, note) {
+  if (note.type !== "intake" || note.status !== "signed" || !needsCosign(note.signer_credentials)) return { required: false };
+  const row = db.prepare(`SELECT a.created_at, u.name, u.credentials FROM note_addenda a JOIN users u ON u.id = a.author_id
+    WHERE a.note_id = ? AND a.content LIKE ? ORDER BY a.id LIMIT 1`).get(note.id, `${COSIGN_PREFIX}%`);
+  const dueMs = Date.parse(String(note.signed_at).replace(" ", "T") + "Z") + COSIGN_HOURS * 3.6e6;
+  const at = row ? Date.parse(String(row.created_at).replace(" ", "T") + "Z") : Date.now();
+  return { required: true, cosigned: !!row, by: row ? userLine(row) : null, cosigned_at: row ? row.created_at : null,
+    due_at: new Date(dueMs).toISOString().slice(0, 19).replace("T", " "), overdue: at > dueMs };
+}
+
+/** Latest score per screening instrument, for prefilling "Screener results". */
+function screenerSummary(db, patientId) {
+  const rows = db.prepare("SELECT instrument, total_score, severity, administered_on FROM assessments WHERE patient_id = ? ORDER BY administered_on DESC, id DESC").all(patientId);
+  const seen = new Set();
+  const out = [];
+  for (const r of rows) {
+    if (seen.has(r.instrument)) continue;
+    seen.add(r.instrument);
+    out.push(`${r.instrument} ${r.total_score} (${r.severity}) on ${r.administered_on}`);
+  }
+  return out.join("; ");
+}
+
+/** "Nov 9, 2026 at 3:04 PM EST" in clinic time for a UTC SQLite timestamp. */
+function signedStamp(utc) {
+  const d = new Date(String(utc || "").replace(" ", "T") + "Z");
+  if (isNaN(d)) return String(utc || "");
+  const date = d.toLocaleDateString("en-US", { timeZone: TZ, month: "short", day: "numeric", year: "numeric" });
+  const time = d.toLocaleTimeString("en-US", { timeZone: TZ, hour: "numeric", minute: "2-digit", timeZoneName: "short" });
+  return `${date} at ${time}`;
+}
 
 function deny(req, res, message) {
   audit(req, "forbidden", null, null, null, `${req.method} ${req.originalUrl}`);
@@ -441,7 +657,15 @@ function readForm(body, type, format, prev = {}) {
   const errors = {};
   let risk_level = null;
   for (const f of fieldsFor(type, format)) {
-    if (f.kind === "textarea" || f.kind === "text") content[f.key] = str(body[f.key]);
+    if (f.kind === "text" && f.ui === "dx") {
+      const v = str(body[f.key]).toUpperCase().slice(0, 10);
+      if (v && !DX_CODE.test(v)) errors[f.key] = "Choose a diagnosis code (e.g. F41.1).";
+      else content[f.key] = v;
+    } else if (f.kind === "text" && f.ui === "number") {
+      const v = str(body[f.key]);
+      if (v && !/^\d{1,3}$/.test(v)) errors[f.key] = `${f.label} must be a whole number.`;
+      else content[f.key] = v;
+    } else if (f.kind === "textarea" || f.kind === "text") content[f.key] = str(body[f.key]);
     else if (f.kind === "edition") {
       const v = str(body[f.key]);
       if (v && !ASAM_EDITIONS.some((o) => o.value === v)) errors[f.key] = "Choose an ASAM Criteria edition.";
@@ -501,24 +725,34 @@ function readForm(body, type, format, prev = {}) {
   return { content, risk_level, service_date, errors };
 }
 
-/** Requirements for signing. Returns { key: message }. */
-function signErrors(note, { planObjectiveCount = 0, addressedCount = 0 } = {}) {
+/**
+ * Requirements for signing. Returns { key: message }. `ctx.ahcccs` turns on AHCCCS-only requirements
+ * (fields marked `ahcccs`); `ctx.age` / `ctx.hasSud` drive the intake level-of-care tool rule.
+ */
+function signErrors(note, { planObjectiveCount = 0, addressedCount = 0, ahcccs = false, age = null, hasSud = false } = {}) {
   const c = parseContent(note);
   const errors = {};
   const empty = (v) => !v || (Array.isArray(v) ? v.length === 0 : !String(v).trim());
   const ed = asamEdition(c);
+  const needed = (f) => f.required || (f.ahcccs && ahcccs && (!f.when || f.when(c)));
+  const AH = ahcccs ? " (AHCCCS, AMPM 940)" : "";
   for (const f of fieldsFor(note.type, note.format)) {
-    if (["textarea", "text", "select", "date", "asam_level"].includes(f.kind) && f.required && empty(c[f.key])) errors[f.key] = `${f.label} is required.`;
+    if (["textarea", "text", "select", "date", "asam_level"].includes(f.kind) && needed(f) && empty(c[f.key])) {
+      errors[f.key] = `${f.label} is required${f.required ? "" : AH}.`;
+    }
+    if (f.kind === "mse" && f.ahcccs && ahcccs && !MSE.some(([k]) => !empty(c[`mse_${k}`]))) {
+      errors.mse = `Mental status exam: document at least appearance and mood${AH}.`;
+    }
     if (f.kind === "rated") {
       const label = f.labels[ed];
       if (empty(c[`${f.key}_rating`])) errors[`${f.key}_rating`] = `${label}: rating is required.`;
       if (empty(c[f.key])) errors[f.key] = `${label}: narrative is required.`;
     }
-    if (f.kind === "session") {
+    if (f.kind === "session" && (!f.ahcccs || ahcccs)) {
       if (empty(c.session_start)) errors.session_start = "Session start time is required.";
       if (empty(c.session_end)) errors.session_end = "Session end time is required.";
     }
-    if (f.kind === "checks" && f.required && empty(c[f.key]) && empty(c[`${f.key}_other`])) {
+    if (f.kind === "checks" && needed(f) && empty(c[f.key]) && empty(c[`${f.key}_other`])) {
       errors[f.key] = `${f.label}: select at least one.`;
     }
     if (f.kind === "interventions" && empty(c.interventions) && empty(c.interventions_other)) {
@@ -534,6 +768,18 @@ function signErrors(note, { planObjectiveCount = 0, addressedCount = 0 } = {}) {
   if (note.type === "asam" && !empty(c.adjusted_level) && !empty(c.indicated_level) &&
       c.adjusted_level !== c.indicated_level && empty(c.level_difference_reason)) {
     errors.level_difference_reason = "Explain why the adjusted level of care differs from the indicated level.";
+  }
+  if (ahcccs && c.telehealth_modality === "audio_only") {
+    const m = sessionMinutes(c);
+    if (m !== null && m <= 10) errors.audio_only_minutes = "Audio-only telehealth must run over 10 minutes to be billable (AHCCCS Telehealth Code Set).";
+  }
+  if (ahcccs && note.type === "intake") {
+    if (age !== null && age >= 6 && age <= 17 && c.loc_tool && c.loc_tool !== "calocus") {
+      errors.loc_tool = "Members aged 6–17 need a CALOCUS level-of-care assessment (AMPM 320-O).";
+    }
+    if (age !== null && age >= 18 && hasSud && c.loc_tool && c.loc_tool !== "asam") {
+      errors.loc_tool = "Adults with a substance use disorder need an ASAM level-of-care assessment (AMPM 320-O).";
+    }
   }
   // Golden thread: with an active plan that has objectives, a session note must say which it addressed.
   if (PLAN_LINKED_TYPES.includes(note.type) && planObjectiveCount > 0 && addressedCount < 1) errors.objectives = OBJ_SIGN_MSG;
@@ -551,7 +797,9 @@ function errorSummary(errors) {
     <ul class="list">${list.map((e) => html`<li>${e}</li>`)}</ul></div>`;
 }
 const errText = (errors, k) => (errors && errors[k] ? html`<span class="error-text">${errors[k]}</span>` : "");
-const req_ = (f) => (f.required ? html` <span class="hint">(required to sign)</span>` : "");
+let reqCtx = { ahcccs: false };
+const req_ = (f) => (f.required ? html` <span class="hint">(required to sign)</span>`
+  : f.ahcccs ? html` <span class="hint ahcccs-req">${reqCtx.ahcccs ? `(required to sign${f.when ? " when applicable" : ""})` : "(AHCCCS)"}</span>` : "");
 
 function roiNotice(includesSud) {
   return html`<div class="alert alert--info" role="note"><strong>Client rights for this consent.</strong>
@@ -607,8 +855,25 @@ function objectivesFieldset(patient, plan, selected, errors) {
   </fieldset>`;
 }
 
-function fieldInputs(type, format, v, errors) {
+function fieldInputs(type, format, v, errors, ctx = {}) {
+  reqCtx = { ahcccs: !!ctx.ahcccs };
   return fieldsFor(type, format).map((f) => {
+    if (f.kind === "heading") {
+      return html`<div class="span-all form-subhead"><h3>${f.label}${ctx.ahcccs ? html` <span class="badge badge--info">AHCCCS member</span>` : ""}</h3>
+        <p class="hint">${ctx.ahcccs ? "This client is an AHCCCS member: these fields are required to sign." : f.hint}</p></div>`;
+    }
+    if (f.kind === "text" && f.ui === "dx") {
+      const dx = ctx.diagnoses || [];
+      const cur = v[f.key] || "";
+      const opts = [{ value: "", label: "Select…" }, ...dx.map((d) => ({ value: d.icd10_code, label: `${d.icd10_code} ${d.description}` }))];
+      if (cur && !opts.some((o) => o.value === cur)) opts.push({ value: cur, label: `${cur} (not an active diagnosis)` });
+      return html`<label>${f.label}${req_(f)}
+        ${dx.length || cur ? select(f.key, opts, cur) : html`<input type="text" name="${f.key}" value="${cur}" maxlength="10" placeholder="e.g. F41.1">
+          <span class="hint">No active diagnoses on the chart yet.</span>`}${errText(errors, f.key)}</label>`;
+    }
+    if (f.kind === "text" && f.ui === "number") {
+      return html`<label>${f.label}${req_(f)}<input type="number" min="0" max="999" name="${f.key}" value="${v[f.key] || ""}">${errText(errors, f.key)}</label>`;
+    }
     if (f.kind === "textarea") {
       return html`<label class="span-all">${f.label}${req_(f)}${f.hint ? html` <span class="hint">${f.hint}</span>` : ""}
         <textarea name="${f.key}" rows="5">${v[f.key] || ""}</textarea>${errText(errors, f.key)}</label>`;
@@ -652,6 +917,12 @@ function fieldInputs(type, format, v, errors) {
         <label class="span-all">Findings <span class="hint">(required to sign)</span><textarea name="${f.key}" rows="3">${v[f.key] || ""}</textarea>${errText(errors, f.key)}</label>
       </div></fieldset>`;
     }
+    if (f.kind === "session" && f.ahcccs) {
+      const h = ctx.ahcccs ? html`<span class="hint">(required to sign; actual times)</span>` : html`<span class="hint">(AHCCCS)</span>`;
+      return html`
+        <label>Start time ${h}<input type="time" name="session_start" value="${v.session_start || ""}">${errText(errors, "session_start")}</label>
+        <label>Stop time ${h}<input type="time" name="session_end" value="${v.session_end || ""}">${errText(errors, "session_end")}</label>`;
+    }
     if (f.kind === "session") {
       return html`
         <label>Session start <span class="hint">(required to sign)</span><input type="time" name="session_start" value="${v.session_start || ""}">${errText(errors, "session_start")}</label>
@@ -675,9 +946,9 @@ function fieldInputs(type, format, v, errors) {
         ${errText(errors, "interventions")}</fieldset>`;
     }
     if (f.kind === "mse") {
-      return html`<fieldset class="span-all"><legend>Mental status exam</legend><div class="form-grid">
+      return html`<fieldset class="span-all"><legend>Mental status exam${f.ahcccs ? req_(f) : ""}</legend><div class="form-grid">
         ${MSE.map(([k, label]) => html`<label>${label}<input type="text" name="mse_${k}" value="${v[`mse_${k}`] || ""}" maxlength="2000"></label>`)}
-      </div></fieldset>`;
+      </div>${errText(errors, "mse")}</fieldset>`;
     }
     if (f.kind === "risk") {
       return html`<fieldset class="span-all"><legend>Risk assessment</legend><div class="form-grid">
@@ -689,6 +960,11 @@ function fieldInputs(type, format, v, errors) {
     }
     return "";
   });
+}
+
+function formCtx(req, patient) {
+  return { ahcccs: isAhcccs(req.db, patient.id),
+    diagnoses: req.db.prepare("SELECT icd10_code, description FROM diagnoses WHERE patient_id = ? AND status = 'active' ORDER BY is_primary DESC, id").all(patient.id) };
 }
 
 function noteForm(req, res, { patient, type, format, values, errors = {}, action, appointmentId, title, status = 200, noteId, objectives = {} }) {
@@ -712,7 +988,7 @@ function noteForm(req, res, { patient, type, format, values, errors = {}, action
       ${appointmentId ? html`<input type="hidden" name="appointment_id" value="${appointmentId}">` : ""}
       <div class="form-grid">
         <label>Service date<input type="date" name="service_date" value="${values.service_date || ""}" required>${errText(errors, "service_date")}</label>
-        ${fieldInputs(type, format, values, errors)}
+        ${fieldInputs(type, format, values, errors, formCtx(req, patient))}
         ${PLAN_LINKED_TYPES.includes(type) ? objectivesFieldset(patient, activePlan(req.db, patient.id), objectives, errors) : ""}
       </div>
       <div class="form-actions">
@@ -730,8 +1006,15 @@ function section(label, text) {
 
 function noteBody(note) {
   const c = parseContent(note);
-  return fieldsFor(note.type, note.format).map((f) => {
+  const blank = (v) => v === undefined || v === null || String(v).trim() === "";
+  const fields = fieldsFor(note.type, note.format);
+  const encFilled = fields.some((f) => f.enc && !blank(c[f.key]));
+  return fields.map((f) => {
     if (f.key === "level_difference_reason" && !String(c[f.key] || "").trim()) return "";
+    // Encounter / AHCCCS fields are optional for most clients: hide them when empty.
+    if (f.kind === "heading") return encFilled ? html`<h3 class="note-subhead">${f.label.replace(/ \(.*\)$/, "")}</h3>` : "";
+    if (f.enc && blank(c[f.key])) return "";
+    if (f.kind === "session" && f.ahcccs && blank(c.session_start) && blank(c.session_end)) return "";
     if (f.kind === "textarea" || f.kind === "text") return section(f.label, c[f.key]);
     if (f.kind === "select") {
       const o = f.options.find((x) => x.value === c[f.key] && x.value !== "");
@@ -790,7 +1073,26 @@ function noteBody(note) {
 
 function signatureLine(note) {
   if (note.status !== "signed") return html`<p class="signature">Draft. Not signed.</p>`;
-  return html`<p class="signature">Electronically signed by ${userLine({ name: note.signer_name, credentials: note.signer_credentials })} on ${fmtTimestamp(note.signed_at)}</p>`;
+  return html`<p class="signature">Electronically signed by ${userLine({ name: note.signer_name, credentials: note.signer_credentials })} on ${signedStamp(note.signed_at)}</p>`;
+}
+
+function cosignLine(cs) {
+  if (cs.cosigned) {
+    return html`<p class="signature cosign">${COSIGN_PREFIX}: ${cs.by} on ${signedStamp(cs.cosigned_at)}${cs.overdue ? html` <span class="badge badge--warn">after ${COSIGN_HOURS} hours</span>` : ""}</p>`;
+  }
+  return html`<p class="signature cosign cosign--pending"><span class="badge badge--${cs.overdue ? "bad" : "warn"}">${cs.overdue ? "Co-signature overdue" : "Co-signature required"}</span>
+    The signer isn't a licensed BHP. A licensed BHP must review and co-sign this assessment within ${COSIGN_HOURS} hours (by ${signedStamp(cs.due_at)}; AMPM 320-O).</p>`;
+}
+
+function cosignForm(req, note, errs) {
+  if (!can(req.user, "clinical:write") || req.user.id === note.signed_by || !isLicensed(req.user.credentials)) return "";
+  return html`<section class="card no-print" aria-labelledby="cosign-h"><h2 id="cosign-h">Co-sign as licensed BHP</h2>
+    ${errs.cosign ? html`<div class="alert alert--error" role="alert">${errs.cosign}</div>` : ""}
+    <form method="post" action="/ehr/notes/${note.id}/cosign" class="stack">${csrfField(req)}
+      <label>Review comment <span class="hint">Optional.</span><textarea name="comment" rows="2" maxlength="2000"></textarea></label>
+      <label>Password <input type="password" name="password" autocomplete="current-password" required></label>
+      <div><button class="btn btn--primary" type="submit">Co-sign assessment</button></div>
+    </form></section>`;
 }
 
 /** Results panel for the insurance compliance check. */
@@ -820,7 +1122,11 @@ function reviewPanel(review) {
     </section>`;
 }
 
-function renderNote(req, res, { note, patient }, { signErrs = {}, addendumError = "", addendumText = "", status = 200, review = null } = {}) {
+function renderNote(req, res, { note, patient }, { signErrs = {}, addendumError = "", addendumText = "", status = 200, review = null, lateReason = "" } = {}) {
+  const content = parseContent(note);
+  const ahcccs = isAhcccs(req.db, patient.id);
+  const late = note.status === "draft" ? lateInfo(note) : { late: false };
+  const cosign = cosignStatus(req.db, note);
   const addenda = req.db.prepare(
     `SELECT a.*, u.name, u.credentials FROM note_addenda a JOIN users u ON u.id = a.author_id
      WHERE a.note_id = ? ORDER BY a.created_at, a.id`).all(note.id);
@@ -860,6 +1166,10 @@ function renderNote(req, res, { note, patient }, { signErrs = {}, addendumError 
       <form method="post" action="/ehr/notes/${note.id}/sign" class="stack" data-confirm="Sign this note? Signed notes cannot be changed; corrections require an addendum.">
         ${csrfField(req)}
         <p class="muted">By entering your password you attest that this note is accurate and complete. Once signed it cannot be edited.</p>
+        ${late.late ? html`<div class="alert alert--warn late-entry-prompt" role="note"><strong>Late entry.</strong>
+          The service ended about ${late.hours} hours ago, more than ${LATE_HOURS} hours before signing. This note will be marked as a late entry with today's date and time (AMPM 940).
+          <label>Late entry reason ${ahcccs ? html`<span class="hint">(required to sign)</span>` : html`<span class="hint">(recommended)</span>`}
+            <textarea name="late_entry_reason" rows="2" maxlength="2000">${lateReason}</textarea>${errText(signErrs, "late_entry_reason")}</label></div>` : ""}
         <label>Password <input type="password" name="password" autocomplete="current-password" required></label>
         <div><button class="btn btn--primary" type="submit">Sign note</button></div>
       </form>
@@ -892,12 +1202,17 @@ function renderNote(req, res, { note, patient }, { signErrs = {}, addendumError 
         <dt>Service date</dt><dd>${fmtDate(note.service_date)}</dd>
         ${appt ? html`<dt>Appointment</dt><dd>${fmtDate(appt.start_at)} ${fmtTime(appt.start_at)} · ${humanize(appt.type)}</dd>` : ""}
         <dt>Author</dt><dd>${userLine({ name: note.author_name, credentials: note.author_credentials })}</dd>
+        ${ahcccs ? html`<dt>Payer rules</dt><dd><span class="badge badge--info">AHCCCS member</span></dd>` : ""}
+        ${content.late_entry ? html`<dt>Late entry</dt><dd class="late-entry"><span class="badge badge--warn">Late entry</span>
+          Entered ${signedStamp(content.late_entry_at)}. Reason: ${content.late_entry_reason || html`<span class="muted">not given</span>`}</dd>` : ""}
       </dl>
       <hr>
       ${noteBody(note)}
       ${objectivesSection}
       ${signatureLine(note)}
+      ${cosign.required ? cosignLine(cosign) : ""}
     </article>
+    ${cosign.required && !cosign.cosigned && ahcccs ? cosignForm(req, note, signErrs) : ""}
     ${signForm}
     ${addendaSection}`;
   res.status(status).send(chartPage(req, patient, "notes", body, { title: `${typeLabel(note)} · ${patientName(patient)}` }));
@@ -964,9 +1279,17 @@ router.get("/patients/:id/notes/new", requirePerm("clinical:write"), (req, res) 
     "Primary clinician: \nClinic: (555) 010-0123\n988 Suicide & Crisis Lifeline: call or text 988\nEmergency: 911 or nearest emergency department: ";
   if (type === "roi") values.signed_on = today();
   if (type === "asam") values.asam_edition = "4";
+  const ahcccs = isAhcccs(req.db, patient.id);
+  const enc = fieldsFor(type, format).some((f) => f.enc);
+  if (enc) {
+    if (type === "group") values.service_type = "group";
+    if (fieldsFor(type, format).some((f) => f.key === "screener_results")) values.screener_results = screenerSummary(req.db, patient.id);
+  }
   if (appt) {
     values.service_date = appt.start_at.slice(0, 10);
-    if (type === "progress" || type === "group") { values.session_start = appt.start_at.slice(11, 16); values.session_end = appt.end_at.slice(11, 16); }
+    // AHCCCS requires actual start/stop times, not the schedule (AMPM 940 4.l.viii), so don't prefill them.
+    if ((type === "progress" || type === "group") && !ahcccs) { values.session_start = appt.start_at.slice(11, 16); values.session_end = appt.end_at.slice(11, 16); }
+    if (enc && appt.modality === "in_person") { values.telehealth_modality = "in_person"; values.pos = "11"; }
   }
   noteForm(req, res, { patient, type, format, values, action: `/ehr/patients/${patient.id}/notes`,
     appointmentId: appt ? appt.id : null, title: `New ${TYPES[type].label.replace(/^\w/, (c) => c.toLowerCase()).replace(/^aSAM/, "ASAM")}` });
@@ -1110,7 +1433,17 @@ router.post("/notes/:noteId/sign", requirePerm("clinical:write"), (req, res) => 
     const linkedIds = new Set(req.db.prepare("SELECT objective_id FROM note_objectives WHERE note_id = ?").all(note.id).map((r) => r.objective_id));
     thread = { planObjectiveCount: ids.length, addressedCount: ids.filter((i) => linkedIds.has(i)).length };
   }
-  const errors = signErrors(note, thread);
+  const member = memberContext(req.db, patient, note.service_date);
+  const errors = signErrors(note, { ...thread, ...member });
+  // Late entry (AMPM 940 2.g/2.i): more than 48 hours after the service ended.
+  const late = lateInfo(note);
+  const lateReason = str(req.body.late_entry_reason).slice(0, 2000);
+  if (late.late && member.ahcccs && !lateReason) {
+    errors.late_entry_reason = `This note is being signed more than ${LATE_HOURS} hours after the service. Enter a late entry reason (AMPM 940).`;
+  }
+  // Cloned documentation (AMPM 940 2.h; edit MD435): blocks AHCCCS members, warns otherwise.
+  const clone = findClone(req.db, note);
+  if (clone && member.ahcccs) errors.clone = cloneMessage(clone);
   const pw = typeof req.body.password === "string" ? req.body.password : "";
   const stored = req.db.prepare("SELECT password_hash FROM users WHERE id = ?").get(req.user.id);
   if (!pw || !stored || !verifyPassword(pw, stored.password_hash)) {
@@ -1118,15 +1451,43 @@ router.post("/notes/:noteId/sign", requirePerm("clinical:write"), (req, res) => 
     audit(req, "sign_failed", "note", note.id, patient.id, "password");
   }
   if (Object.keys(errors).length) {
-    if (!errors.password) audit(req, "sign_failed", "note", note.id, patient.id, "incomplete");
-    return renderNote(req, res, loaded, { signErrs: errors, status: 400 });
+    if (!errors.password) audit(req, "sign_failed", "note", note.id, patient.id, errors.clone ? "cloned" : "incomplete");
+    return renderNote(req, res, loaded, { signErrs: errors, status: 400, lateReason });
   }
+  const c = parseContent(note);
+  if (late.late) Object.assign(c, { late_entry: true, late_entry_reason: lateReason, late_entry_hours: late.hours });
   const r = req.db.prepare(
-    `UPDATE notes SET status = 'signed', signed_at = datetime('now'), signed_by = ?, updated_at = datetime('now')
-     WHERE id = ? AND author_id = ? AND status = 'draft'`).run(req.user.id, note.id, req.user.id);
+    `UPDATE notes SET status = 'signed', signed_at = datetime('now'), signed_by = ?, updated_at = datetime('now'),
+       content = CASE WHEN ? THEN json_set(?, '$.late_entry_at', datetime('now')) ELSE content END
+     WHERE id = ? AND author_id = ? AND status = 'draft'`).run(req.user.id, late.late ? 1 : 0, JSON.stringify(c), note.id, req.user.id);
   if (r.changes !== 1) return deny(req, res, "This note is already signed.");
-  audit(req, "sign", "note", note.id, patient.id);
+  audit(req, "sign", "note", note.id, patient.id, [late.late ? "late entry" : "", clone ? `similar to note ${clone.note_id}` : ""].filter(Boolean).join("; ") || null);
   req.flash("success", "Note signed.");
+  if (late.late && !lateReason) req.flash("warn", "Signed as a late entry without a reason. Add an addendum explaining the delay.");
+  if (clone) req.flash("warn", `Possible cloned note: ${cloneMessage(clone)}`);
+  res.redirect(`/ehr/notes/${note.id}`);
+});
+
+router.post("/notes/:noteId/cosign", requirePerm("clinical:write"), (req, res) => {
+  const loaded = loadNote(req, res);
+  if (!loaded) return;
+  const { note, patient } = loaded;
+  const cs = cosignStatus(req.db, note);
+  if (!cs.required) return deny(req, res, "This note doesn't need a co-signature.");
+  if (cs.cosigned) return deny(req, res, "This assessment is already co-signed.");
+  if (req.user.id === note.signed_by) return deny(req, res, "A different, licensed clinician must co-sign.");
+  if (!isLicensed(req.user.credentials)) return deny(req, res, "Only a licensed BHP can co-sign an assessment.");
+  const pw = typeof req.body.password === "string" ? req.body.password : "";
+  const stored = req.db.prepare("SELECT password_hash FROM users WHERE id = ?").get(req.user.id);
+  if (!pw || !stored || !verifyPassword(pw, stored.password_hash)) {
+    audit(req, "cosign_failed", "note", note.id, patient.id, "password");
+    return renderNote(req, res, loaded, { signErrs: { cosign: "Password is incorrect. Re-enter your password to co-sign." }, status: 400 });
+  }
+  const comment = str(req.body.comment).slice(0, 2000);
+  req.db.prepare("INSERT INTO note_addenda (note_id, author_id, content) VALUES (?, ?, ?)")
+    .run(note.id, req.user.id, `${COSIGN_PREFIX}: reviewed and agree with this assessment.${comment ? ` ${comment}` : ""}`);
+  audit(req, "cosign", "note", note.id, patient.id);
+  req.flash("success", "Assessment co-signed.");
   res.redirect(`/ehr/notes/${note.id}`);
 });
 
@@ -1137,6 +1498,9 @@ router.post("/notes/:noteId/addenda", requirePerm("clinical:write"), (req, res) 
   if (note.status !== "signed") return deny(req, res, "Addenda can only be added to signed notes. Edit the draft instead.");
   const content = str(req.body.content);
   if (!content) return renderNote(req, res, loaded, { addendumError: "Addendum text is required.", status: 400 });
+  if (content.toLowerCase().startsWith(COSIGN_PREFIX.toLowerCase())) {
+    return renderNote(req, res, loaded, { addendumError: "Use the co-sign action to co-sign an assessment.", status: 400, addendumText: content });
+  }
   const id = tx(req.db, () => {
     const addId = Number(req.db.prepare("INSERT INTO note_addenda (note_id, author_id, content) VALUES (?, ?, ?)")
       .run(note.id, req.user.id, content).lastInsertRowid);
@@ -1161,4 +1525,5 @@ router.post("/notes/:noteId/delete", requirePerm("clinical:write"), (req, res) =
   res.redirect(`/ehr/patients/${patient.id}/notes`);
 });
 
-module.exports = { router, TYPES, PLAN_REQUIRED_TYPES, activePlan, signErrors };
+module.exports = { router, TYPES, PLAN_REQUIRED_TYPES, activePlan, signErrors, memberContext, findClone, lateInfo, cosignStatus,
+  sessionMinutes, fieldsFor, needsCosign, COSIGN_PREFIX };

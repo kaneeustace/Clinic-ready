@@ -12,6 +12,7 @@
  * sent as structured fields, but clinicians may have typed identifiers into the note text itself.
  */
 const AnthropicSDK = require("@anthropic-ai/sdk");
+const { unitsFor15 } = require("./payers");
 const Anthropic = AnthropicSDK.default || AnthropicSDK;
 
 const MODEL = process.env.EHR_AI_MODEL || "claude-opus-5-5";
@@ -30,15 +31,16 @@ const minutesBetween = (a, b) => {
 function buildContext(db, note) {
   const content = safeJson(note.content);
   const appt = note.appointment_id ? db.prepare("SELECT type, modality, start_at, end_at FROM appointments WHERE id = ?").get(note.appointment_id) : null;
-  const charges = note.appointment_id
-    ? db.prepare("SELECT cpt_code, modifier, units, diagnosis_codes FROM charges WHERE appointment_id = ? AND status <> 'void'").all(note.appointment_id) : [];
+  const charges = db.prepare(`SELECT cpt_code, modifier, units, diagnosis_codes, pos, minutes FROM charges
+    WHERE (appointment_id = ? OR note_id = ?) AND status <> 'void' ORDER BY id`).all(note.appointment_id || -1, note.id);
   const diagnoses = db.prepare("SELECT icd10_code, description, is_primary FROM diagnoses WHERE patient_id = ? AND status = 'active' ORDER BY is_primary DESC")
     .all(note.patient_id);
-  const plan = db.prepare("SELECT id, review_date, status FROM treatment_plans WHERE patient_id = ? AND status = 'active' ORDER BY id DESC LIMIT 1").get(note.patient_id);
+  const plan = db.prepare("SELECT id, review_date, status, start_date, activated_at, signed_at FROM treatment_plans WHERE patient_id = ? AND status = 'active' ORDER BY id DESC LIMIT 1").get(note.patient_id);
   const objectives = plan ? db.prepare(
     `SELECT o.id, o.text FROM plan_objectives o JOIN plan_goals g ON g.id = o.goal_id JOIN plan_problems p ON p.id = g.problem_id
      WHERE p.plan_id = ? AND o.status <> 'discontinued' ORDER BY p.sort, g.sort, o.sort`).all(plan.id) : [];
   const addressed = db.prepare("SELECT objective_id, progress, comment FROM note_objectives WHERE note_id = ?").all(note.id);
+  const ah = ahcccsContext(db, note, plan);
   return {
     note_type: note.type,
     format: note.format,
@@ -46,12 +48,51 @@ function buildContext(db, note) {
     risk_level: note.risk_level,
     session_minutes: minutesBetween(content.session_start, content.session_end),
     appointment: appt ? { type: appt.type, modality: appt.modality, scheduled_minutes: minutesBetween(appt.start_at.slice(11, 16), appt.end_at.slice(11, 16)) } : null,
-    charges: charges.map((c) => ({ cpt: c.cpt_code, modifier: c.modifier, units: c.units, diagnosis_codes: c.diagnosis_codes })),
+    charges: charges.map((c) => ({ cpt: c.cpt_code, modifier: c.modifier, units: c.units, diagnosis_codes: c.diagnosis_codes, pos: c.pos, minutes: c.minutes })),
     diagnoses: diagnoses.map((d) => ({ code: d.icd10_code, description: d.description, primary: !!d.is_primary })),
-    treatment_plan: plan ? { active: true, review_due: plan.review_date } : { active: false },
+    treatment_plan: plan ? { active: true, review_due: plan.review_date, ...ah.plan } : { active: false },
     plan_objectives: objectives.map((o) => ({ id: o.id, text: o.text, addressed_this_session: addressed.some((a) => a.objective_id === o.id) })),
     objectives_addressed: addressed.length,
+    ...ah.fields,
     content,
+  };
+}
+
+/**
+ * AHCCCS context (docs/ahcccs-spec.md): member flag, age on the date of service, latest signed assessment,
+ * plan date + guardian signature, missing AHCCCS note elements, cloned-note match, late entry and co-sign state.
+ * No direct identifiers. notes.js is required lazily (it requires this module).
+ */
+function ahcccsContext(db, note, plan) {
+  const notes = require("./routes/notes");
+  const patient = db.prepare("SELECT id, dob FROM patients WHERE id = ?").get(note.patient_id);
+  if (!patient) return { fields: { ahcccs: false }, plan: {} };
+  const member = notes.memberContext(db, patient, note.service_date);
+  const planInfo = plan ? {
+    dated: String(plan.activated_at || plan.signed_at || plan.start_date || "").slice(0, 10) || null,
+    guardian_signed: !!db.prepare("SELECT 1 FROM plan_signatures WHERE plan_id = ? AND role = 'guardian' AND declined = 0").get(plan.id),
+  } : {};
+  if (!member.ahcccs) return { fields: { ahcccs: false }, plan: planInfo };
+  const intake = db.prepare(`SELECT MAX(service_date) AS d FROM notes WHERE patient_id = ? AND type = 'intake' AND status = 'signed'
+    AND (? IS NULL OR service_date <= ?)`).get(note.patient_id, note.service_date, note.service_date);
+  // AHCCCS-only requirements = sign errors with AHCCCS rules on, minus those that apply to everyone.
+  const base = notes.signErrors(note, { ...member, ahcccs: false });
+  const full = notes.signErrors(note, member);
+  const missing = Object.entries(full).filter(([k]) => !(k in base) && !["audio_only_minutes", "session_start", "session_end"].includes(k)).map(([, v]) => v);
+  const clone = notes.findClone(db, note);
+  const cosign = note.type === "intake" ? notes.cosignStatus(db, note) : { required: false };
+  return {
+    plan: planInfo,
+    fields: {
+      ahcccs: true,
+      patient_age: member.age,
+      has_sud_diagnosis: member.hasSud,
+      latest_assessment_date: intake ? intake.d : null,
+      ahcccs_missing: missing,
+      cloned_from: clone ? { service_date: clone.service_date, similarity: Math.round(clone.similarity * 100) / 100 } : null,
+      late_entry_pending: note.status === "draft" && notes.lateInfo(note).late,
+      cosign: cosign.required ? { cosigned: cosign.cosigned, overdue: cosign.overdue } : null,
+    },
   };
 }
 
@@ -81,7 +122,7 @@ function ruleChecks(ctx) {
   const text = Object.values(c).filter((v) => typeof v === "string").join("\n");
   const therapy = ["progress", "group"].includes(ctx.note_type);
 
-  if (therapy && ctx.session_minutes == null) {
+  if (therapy && ctx.session_minutes == null && !ctx.ahcccs) {
     out.push(finding("high", "Time", "Session start and end times are missing.", "Record start and end times; most payers deny time-based psychotherapy codes without them."));
   }
   for (const ch of ctx.charges) {
@@ -90,7 +131,7 @@ function ruleChecks(ctx) {
       out.push(finding("high", "Coding", `CPT ${ch.cpt} requires ${range[0]}${range[1] === Infinity ? "+" : `–${range[1]}`} minutes, but the note documents ${ctx.session_minutes} minutes.`,
         "Correct the session times or change the charge to the code that matches the documented time."));
     }
-    if (ctx.appointment && ctx.appointment.modality === "telehealth" && !/95|GT/i.test(ch.modifier || "")) {
+    if (!ctx.ahcccs && ctx.appointment && ctx.appointment.modality === "telehealth" && !/95|GT/i.test(ch.modifier || "")) {
       out.push(finding("medium", "Coding", `Telehealth visit billed as ${ch.cpt} without a telehealth modifier.`, "Add modifier 95 (or the payer's required modifier) and the place-of-service code."));
     }
   }
@@ -121,6 +162,122 @@ function ruleChecks(ctx) {
   }
   if (therapy && text && !MEDICAL_NECESSITY.test(text)) {
     out.push(finding("medium", "Medical necessity", "The note doesn't describe current symptoms, functional impairment or measures.", "Document the symptoms and functional problems being treated and how they changed this session."));
+  }
+  if (ctx.ahcccs) out.push(...ahcccsChecks(ctx));
+  return out;
+}
+
+/* AHCCCS (Arizona Medicaid) rules; docs/ahcccs-spec.md. Each issue cites the policy or claim edit. */
+const AHCCCS_BILLABLE = ["progress", "group", "psychiatry", "contact"];
+/** Per-15-minute HCPCS codes (B2 Matrix). H0031 (assessment) is per encounter. */
+const PER_15 = new Set(["H0004", "H2014", "H2017", "H0038", "T1016"]);
+const daysBetween = (a, b) => Math.floor((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 864e5);
+const modsOf = (m) => String(m || "").toUpperCase().split(/[\s,;:/]+/).filter(Boolean);
+
+function ahcccsChecks(ctx) {
+  const out = [];
+  const c = ctx.content || {};
+  const billable = AHCCCS_BILLABLE.includes(ctx.note_type);
+  const dos = ctx.service_date;
+  const mins = ctx.session_minutes;
+  const plan = ctx.treatment_plan || {};
+
+  if (billable && mins == null) {
+    out.push(finding("high", "Time", "Actual start and stop times are missing (AMPM 940 4.l.viii; CBHSG core limitation #7).",
+      "Record the actual start and stop times for this member; schedule-based or templated times aren't accepted."));
+  }
+  if (billable && dos) {
+    if (!ctx.latest_assessment_date) {
+      out.push(finding("high", "Other", "No signed assessment is on file for the date of service (AMPM 320-O; edit MD466).", "Complete and sign the intake assessment before billing services."));
+    } else if (daysBetween(ctx.latest_assessment_date, dos) > 365) {
+      out.push(finding("high", "Other", `The assessment (${ctx.latest_assessment_date}) is more than 1 year old on the date of service (AMPM 320-O; edit MD466).`,
+        "Complete the annual assessment update."));
+    }
+    if (!plan.active) {
+      out.push(finding("high", "Treatment plan", "No current service plan on the date of service (AMPM 320-O; edit MD466).", "Activate a signed service plan before billing."));
+    } else if (plan.dated && daysBetween(plan.dated, dos) > 365) {
+      out.push(finding("high", "Treatment plan", `The service plan (${plan.dated}) is more than 1 year old on the date of service (AMPM 320-O; edit MD466).`,
+        "Review and re-sign the service plan; claims with a plan older than 1 year are denied."));
+    }
+  }
+  if (ctx.patient_age != null && ctx.patient_age < 18 && plan.active && !plan.guardian_signed) {
+    out.push(finding("high", "Treatment plan", "The member is under 18 and the service plan has no parent/guardian signature (AMPM 320-O; edit MD454).",
+      "Obtain the parent or guardian signature on the service plan."));
+  }
+  const groupNote = ctx.note_type === "group" || c.service_type === "group";
+  for (const ch of ctx.charges || []) {
+    const mods = modsOf(ch.modifier);
+    if (PER_15.has(ch.cpt)) {
+      const minutes = ch.minutes != null ? ch.minutes : mins;
+      if (minutes != null) {
+        const expected = unitsFor15(minutes);
+        if (expected === 0) {
+          out.push(finding("high", "Coding", `${ch.cpt}: ${minutes} minutes is under the 8-minute minimum for a 15-minute unit (CBHSG core limitation #10).`, "Don't bill this service, or correct the documented times."));
+        } else if (Number(ch.units) !== expected) {
+          out.push(finding("high", "Coding", `${ch.cpt} billed for ${ch.units} unit(s), but ${minutes} documented minutes support ${expected} (CBHSG core limitation #10; edit MD418).`,
+            `Bill ${expected} unit(s) or correct the documented times.`));
+        }
+      }
+    }
+    if (groupNote && !mods.includes("HQ")) {
+      out.push(finding("high", "Coding", `Group service billed as ${ch.cpt} without the HQ modifier (AMPM 940 4.l.vi; B2 Matrix).`, "Add modifier HQ to group services."));
+    }
+    if (mods.includes("95") || mods.includes("93")) {
+      out.push(finding("high", "Coding", `${ch.cpt} carries modifier ${mods.includes("95") ? "95" : "93"}; AHCCCS uses GT (audio-video) or FQ (audio-only), never 95/93 (AHCCCS Telehealth Code Set).`,
+        "Replace with GT or FQ to match the note's telehealth modality."));
+    }
+    if (mods.includes("GT") && mods.includes("FQ")) {
+      out.push(finding("high", "Coding", `${ch.cpt} has both GT and FQ; use exactly one telehealth modifier (AHCCCS Telehealth Code Set).`, "Keep the modifier that matches the modality documented in the note."));
+    } else if (c.telehealth_modality === "audio_video" && !mods.includes("GT")) {
+      out.push(finding("high", "Coding", `Audio-video telehealth billed as ${ch.cpt} without modifier GT (AMPM 940 2.m; AHCCCS Telehealth Code Set).`, "Add modifier GT."));
+    } else if (c.telehealth_modality === "audio_only" && !mods.includes("FQ")) {
+      out.push(finding("high", "Coding", `Audio-only telehealth billed as ${ch.cpt} without modifier FQ (AMPM 940 2.m; AHCCCS Telehealth Code Set).`, "Add modifier FQ."));
+    } else if (c.telehealth_modality === "in_person" && (mods.includes("GT") || mods.includes("FQ"))) {
+      out.push(finding("medium", "Coding", `${ch.cpt} has a telehealth modifier but the note documents an in-person service (AMPM 940 2.m).`, "Remove the modifier or correct the note's modality."));
+    }
+    if (mods.includes("FQ") && /^99\d{3}$/.test(ch.cpt)) {
+      out.push(finding("high", "Coding", `FQ (audio-only) isn't allowed on E/M code ${ch.cpt} (AHCCCS Telehealth Code Set).`, "Bill audio-video (GT) or an allowed audio-only code."));
+    }
+    if (["02", "10"].includes(String(ch.pos || ""))) {
+      out.push(finding("high", "Coding", `${ch.cpt} uses place of service ${ch.pos}; AHCCCS uses the member's location (11/12/03/99), not POS 02/10 (AHCCCS Telehealth Code Set; FFS Chapter 19).`,
+        "Change POS to where the member was during the service."));
+    } else if (ch.pos && c.pos && String(ch.pos) !== String(c.pos)) {
+      out.push(finding("medium", "Coding", `Charge POS ${ch.pos} doesn't match the member location in the note (${c.pos}) (AMPM 940 4.l).`, "Make the charge POS match the documented member location."));
+    }
+    const codes = String(ch.diagnosis_codes || "").toUpperCase().split(/[\s,;]+/).filter(Boolean);
+    if (c.dx_addressed && codes.length && !codes.includes(String(c.dx_addressed).toUpperCase())) {
+      out.push(finding("medium", "Diagnosis", `The charge's diagnosis (${codes.join(", ")}) isn't the diagnosis addressed in the note (${c.dx_addressed}) (AMPM 940 4.l.vii).`,
+        "Bill the diagnosis the session addressed, or document how the billed diagnosis was addressed."));
+    }
+  }
+  if (c.telehealth_modality === "audio_only") {
+    if (!String(c.audio_only_reason || "").trim()) {
+      out.push(finding("high", "Other", "Audio-only telehealth without the reason video wasn't available (AMPM 320-I; AHCCCS Telehealth Code Set).", "Document why audio-video wasn't available."));
+    }
+    if (mins != null && mins <= 10) {
+      out.push(finding("high", "Time", `Audio-only session of ${mins} minutes; audio-only must run over 10 minutes (AHCCCS Telehealth Code Set).`, "Don't bill this as an audio-only service."));
+    }
+  }
+  if ((ctx.ahcccs_missing || []).length) {
+    out.push(finding("high", "Other", `Missing AHCCCS documentation elements (AMPM 940 4.l / 320-O): ${ctx.ahcccs_missing.join(" ")}`, "Complete these fields; AHCCCS reviewers score each element."));
+  }
+  if (c.late_entry && !String(c.late_entry_reason || "").trim()) {
+    out.push(finding("medium", "Other", "The note was signed as a late entry (more than 48 hours after the service) without a reason (AMPM 940 2.g, 2.i).", "Add an addendum giving the reason for the late entry."));
+  }
+  if (ctx.late_entry_pending) {
+    out.push(finding("medium", "Other", "This draft is more than 48 hours past the service and will be a late entry (AMPM 940 2.g, 2.i).", "Sign it now and give the late entry reason."));
+  }
+  if (ctx.cloned_from) {
+    out.push(finding("high", "Specificity", `The narrative is ${Math.round(ctx.cloned_from.similarity * 100)}% identical to this author's note of ${ctx.cloned_from.service_date} for this member (AMPM 940 2.h; edit MD435).`,
+      "Rewrite the narrative to describe this session; cloned documentation is denied and can be recouped."));
+  }
+  if (["progress", "group"].includes(ctx.note_type) && mins != null && mins > 60 && !String(c.long_session_justification || "").trim()) {
+    out.push(finding("medium", "Time", `The session ran ${mins} minutes without a justification for exceeding 60 minutes (CBHSG counseling #5).`, "Document why the longer session was clinically necessary."));
+  }
+  if (ctx.cosign && !ctx.cosign.cosigned && ctx.cosign.overdue) {
+    out.push(finding("high", "Other", "Assessment by an unlicensed clinician hasn't been co-signed by a licensed BHP within 72 hours (AMPM 320-O; A.A.C. R9-10-1011).", "Have a licensed BHP review and co-sign the assessment."));
+  } else if (ctx.cosign && ctx.cosign.cosigned && ctx.cosign.overdue) {
+    out.push(finding("medium", "Other", "The licensed BHP co-signature came more than 72 hours after the assessment was signed (AMPM 320-O).", "Note the reason for the delay in an addendum."));
   }
   return out;
 }
@@ -156,6 +313,10 @@ const SYSTEM_PROMPT = `You review outpatient behavioral health documentation the
 
 Check for: medical necessity (current symptoms and functional impairment tied to the diagnosis); linkage to treatment plan goals/objectives and progress toward them; specific interventions and the client's response; risk assessment; time documentation that supports the billed CPT code; diagnosis support; and vague or boilerplate language. Report only problems you can point to in this note or its context, each with a concrete fix the clinician can make. Quote the relevant text in "quote" when there is one, otherwise leave it empty. Do not invent clinical facts, do not rewrite the note, and do not give legal or billing guarantees. If the note is well documented, say so in the summary and return few or no findings. Keep each issue and suggestion to one or two sentences.`;
 
+const AHCCCS_PROMPT = `
+
+This member is enrolled in AHCCCS (Arizona Medicaid). Also apply AHCCCS AMPM 940 and the Covered Behavioral Health Services Guide: actual start/stop times; service type (individual, family with or without the member, group with HQ); the diagnosis addressed and whether it is new or continuing; place of service as the member's location (never POS 02/10); telehealth modality with GT (audio-video) or FQ (audio-only), never 95/93, with consent and, for audio-only, why video wasn't available; participants and their roles; interpreter/language; goals linked to the service plan; interventions; the member's individualized response and progress; presenting problem, brief mental status and screener results for counseling; justification for sessions over 60 minutes; coordination of care; late entries (over 48 hours) with a reason; no cloned or boilerplate narrative (edit MD435); 15-minute units matching documented minutes; a current assessment and service plan no older than one year (edit MD466); and a guardian signature on a minor's plan (edit MD454). Cite the AMPM section or claim edit in the issue text when it applies.`;
+
 let clientOverride = null;
 /** Tests can inject a fake client: setClient({ beta: { messages: { create: async () => response } } }). */
 function setClient(c) { clientOverride = c; }
@@ -176,7 +337,7 @@ async function aiReview(ctx) {
     betas: ["server-side-fallback-2026-07-01"],
     fallbacks: "default",
     output_config: { effort: "high", format: { type: "json_schema", schema: FINDINGS_SCHEMA } },
-    system: SYSTEM_PROMPT,
+    system: SYSTEM_PROMPT + (ctx.ahcccs ? AHCCCS_PROMPT : ""),
     messages: [{ role: "user", content: `Review this note.\n\n${JSON.stringify(ctx, null, 2)}` }],
   });
   if (response.stop_reason === "refusal") {
@@ -214,4 +375,4 @@ async function reviewNote(db, note) {
   return { rules, ai, ctx };
 }
 
-module.exports = { reviewNote, ruleChecks, buildContext, aiConfigured, setClient, FINDINGS_SCHEMA, CPT_TIME, MODEL };
+module.exports = { reviewNote, ruleChecks, ahcccsChecks, buildContext, aiConfigured, setClient, FINDINGS_SCHEMA, CPT_TIME, MODEL, AHCCCS_PROMPT };
