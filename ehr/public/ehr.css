@@ -162,3 +162,11 @@ legend { font-weight: 700; padding: 0 .35rem; }
   .app { display: block; } .content { padding: 0; } .card { box-shadow: none; border: 0; }
   body { background: #fff; }
 }
+
+/* Phones: keep wide tables scrollable inside their card instead of widening the page */
+.grid > *, .tiles > *, .card { min-width: 0; }
+@media (max-width: 760px) {
+  .table { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .content { padding: 1rem; }
+  .sidebar nav a { padding: .45rem .6rem; }
+}
