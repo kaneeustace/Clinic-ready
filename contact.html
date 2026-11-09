@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Contact &amp; Request an Appointment | Clinic Ready Behavioral Health</title>
+  <meta name="description" content="Contact Clinic Ready Behavioral Health or request an appointment online. Call (555) 010-0123. A care coordinator will follow up within one business day. In person and telehealth.">
+  <link rel="icon" href="assets/img/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/css/styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to main content</a>
+
+  <!-- ===== CRISIS BAR (shared — keep identical on every page) ===== -->
+  <div class="crisis-bar" role="region" aria-label="Crisis support">
+    <div class="container">
+      In crisis or thinking about suicide? Call or text <a href="tel:988">988</a> (Suicide &amp; Crisis Lifeline), any time. In an emergency, call <a href="tel:911">911</a>.
+    </div>
+  </div>
+
+  <!-- ===== HEADER (shared — keep identical on every page) ===== -->
+  <header class="site-header">
+    <div class="container">
+      <a class="brand" href="index.html" aria-label="Clinic Ready Behavioral Health, home">
+        <svg class="brand__mark" viewBox="0 0 40 40" aria-hidden="true"><circle cx="20" cy="20" r="20" fill="#2f6b5f"/><path d="M11 24c3-7 6-10 9-10s6 3 9 10" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round"/><circle cx="20" cy="27" r="2.4" fill="#c9774a"/></svg>
+        <span class="brand__name">Clinic Ready<span>Behavioral Health</span></span>
+      </a>
+      <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">
+        <span class="nav-toggle__bars" aria-hidden="true"></span> Menu
+      </button>
+      <nav class="site-nav" id="site-nav" aria-label="Main">
+        <ul>
+          <li><a href="services.html">Services</a></li>
+          <li><a href="approach.html">Our Approach</a></li>
+          <li><a href="team.html">Our Team</a></li>
+          <li><a href="insurance.html">Insurance &amp; Fees</a></li>
+          <li><a href="new-patients.html">New Patients</a></li>
+          <li><a href="contact.html">Contact</a></li>
+          <li><a class="btn btn--primary" href="contact.html#request">Request an appointment</a></li>
+        </ul>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main">
+    <!-- Page hero -->
+    <section class="page-hero">
+      <div class="container">
+        <nav class="breadcrumb" aria-label="Breadcrumb">
+          <a href="index.html">Home</a> / <span aria-current="page">Contact</span>
+        </nav>
+        <span class="eyebrow">Contact us</span>
+        <h1>Contact &amp; request an appointment</h1>
+        <p class="lead">Reaching out is a big step, and you don't need to have everything figured out. Send a short request below or give us a call. A care coordinator will get back to you within one business day.</p>
+      </div>
+    </section>
+
+    <!-- Request form + contact details -->
+    <section class="section" id="request" aria-labelledby="request-heading">
+      <div class="container">
+        <div class="split" style="align-items:start">
+
+          <div style="min-width:0">
+            <span class="eyebrow">New patients</span>
+            <h2 id="request-heading">Request an appointment</h2>
+
+            <div class="notice" role="note" aria-labelledby="form-notice-heading" style="margin-bottom:var(--space-6)">
+              <p id="form-notice-heading"><strong>This form is not for emergencies.</strong></p>
+              <p>If you are in crisis or thinking about suicide, call or text <a href="tel:988">988</a> (Suicide &amp; Crisis Lifeline). In an emergency, call <a href="tel:911">911</a> or go to the nearest emergency room.</p>
+              <p>Please keep details minimal and <strong>do not include detailed health information</strong> in this form. A care coordinator will follow up with you securely to learn more.</p>
+            </div>
+
+            <!--
+              BEFORE LAUNCH: This form has no action attribute, so main.js shows the
+              on-page success message only and nothing is sent anywhere. Wire this form
+              to a HIPAA-compliant form processor (one that will sign a Business
+              Associate Agreement) before going live. Do not send submissions over
+              plain email.
+            -->
+            <form class="form" data-validate aria-describedby="form-required-note">
+              <p class="small muted" id="form-required-note">Fields marked "(required)" must be completed. Everything else is optional.</p>
+
+              <div class="form-row">
+                <div class="field">
+                  <label for="first-name">First name <span class="muted">(required)</span></label>
+                  <input type="text" id="first-name" name="first_name" autocomplete="given-name" required data-error="Please enter your first name.">
+                </div>
+                <div class="field">
+                  <label for="last-name">Last name <span class="muted">(required)</span></label>
+                  <input type="text" id="last-name" name="last_name" autocomplete="family-name" required data-error="Please enter your last name.">
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="field">
+                  <label for="preferred-name">Preferred name <span class="muted">(optional)</span></label>
+                  <input type="text" id="preferred-name" name="preferred_name" autocomplete="nickname" aria-describedby="preferred-name-hint">
+                  <span class="hint" id="preferred-name-hint">The name you'd like us to use, if different.</span>
+                </div>
+                <div class="field">
+                  <label for="dob">Date of birth <span class="muted">(required)</span></label>
+                  <input type="date" id="dob" name="date_of_birth" autocomplete="bday" required data-error="Please enter your date of birth.">
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="field">
+                  <label for="phone">Phone <span class="muted">(required)</span></label>
+                  <input type="tel" id="phone" name="phone" autocomplete="tel" inputmode="tel" required data-error="Please enter a phone number where we can reach you.">
+                </div>
+                <div class="field">
+                  <label for="email">Email <span class="muted">(required)</span></label>
+                  <input type="email" id="email" name="email" autocomplete="email" required data-error="Please enter a valid email address, like name@example.com.">
+                </div>
+              </div>
+
+              <div class="form-row">
+                <fieldset class="field">
+                  <legend>Preferred contact method <span class="muted">(required)</span></legend>
+                  <label class="choice" for="contact-phone"><input type="radio" id="contact-phone" name="contact_method" value="phone" required data-error="Please choose how you'd like us to contact you."> Phone call</label>
+                  <label class="choice" for="contact-text"><input type="radio" id="contact-text" name="contact_method" value="text"> Text message</label>
+                  <label class="choice" for="contact-email"><input type="radio" id="contact-email" name="contact_method" value="email"> Email</label>
+                </fieldset>
+                <fieldset class="field">
+                  <legend>Is it OK to leave a voicemail? <span class="muted">(required)</span></legend>
+                  <label class="choice" for="voicemail-yes"><input type="radio" id="voicemail-yes" name="voicemail_ok" value="yes" required data-error="Please let us know if we can leave a voicemail."> Yes, you may leave a message</label>
+                  <label class="choice" for="voicemail-no"><input type="radio" id="voicemail-no" name="voicemail_ok" value="no"> No, please don't leave a message</label>
+                </fieldset>
+              </div>
+
+              <div class="form-row">
+                <div class="field">
+                  <label for="care-for">Who is care for? <span class="muted">(required)</span></label>
+                  <select id="care-for" name="care_for" required data-error="Please choose who care is for.">
+                    <option value="">Choose one</option>
+                    <option value="myself">Myself</option>
+                    <option value="my-child">My child</option>
+                    <option value="partner-and-me">My partner &amp; me</option>
+                    <option value="my-family">My family</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="service">Service you're interested in <span class="muted">(required)</span></label>
+                  <select id="service" name="service" required data-error="Please choose a service, or select &quot;Not sure&quot;.">
+                    <option value="">Choose one</option>
+                    <option value="individual-therapy">Individual therapy</option>
+                    <option value="psychiatry">Psychiatry / medication</option>
+                    <option value="couples-family">Couples / family</option>
+                    <option value="teen-young-adult">Teen / young adult</option>
+                    <option value="group">Group</option>
+                    <option value="not-sure">Not sure</option>
+                  </select>
+                </div>
+              </div>
+
+              <fieldset class="field">
+                <legend>Visit preference <span class="muted">(required)</span></legend>
+                <label class="choice" for="visit-in-person"><input type="radio" id="visit-in-person" name="visit_preference" value="in-person" required data-error="Please choose a visit preference."> In person</label>
+                <label class="choice" for="visit-telehealth"><input type="radio" id="visit-telehealth" name="visit_preference" value="telehealth"> Telehealth (secure video)</label>
+                <label class="choice" for="visit-either"><input type="radio" id="visit-either" name="visit_preference" value="either"> Either works</label>
+              </fieldset>
+
+              <div class="form-row">
+                <div class="field">
+                  <label for="insurance">Insurance provider <span class="muted">(optional)</span></label>
+                  <input type="text" id="insurance" name="insurance_provider" autocomplete="off" aria-describedby="insurance-hint">
+                  <span class="hint" id="insurance-hint">Just the plan name is fine. No member ID needed.</span>
+                </div>
+                <div class="field">
+                  <label for="referral">How did you hear about us? <span class="muted">(optional)</span></label>
+                  <select id="referral" name="referral_source">
+                    <option value="">Choose one</option>
+                    <option value="search">Online search</option>
+                    <option value="insurance-directory">Insurance directory</option>
+                    <option value="doctor">Doctor or provider referral</option>
+                    <option value="friend-family">Friend or family</option>
+                    <option value="school-employer">School or employer</option>
+                    <option value="social-media">Social media</option>
+                    <option value="other">Other</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="field">
+                <label for="reason">Brief reason for reaching out <span class="muted">(optional)</span></label>
+                <textarea id="reason" name="reason" rows="4" maxlength="500" autocomplete="off" aria-describedby="reason-hint"></textarea>
+                <span class="hint" id="reason-hint">A sentence or two is enough. Please don't include detailed health history; we'll talk through that together, securely.</span>
+              </div>
+
+              <div class="field">
+                <label class="choice" for="consent"><input type="checkbox" id="consent" name="consent" value="yes" required data-error="Please confirm you understand this form is not for emergencies and agree to be contacted."> <span>I understand this form is not for emergencies, and I agree to be contacted by Clinic Ready Behavioral Health using the information I've provided. <span class="muted">(required)</span></span></label>
+              </div>
+
+              <div class="btn-row">
+                <button type="submit" class="btn btn--primary">Send request</button>
+              </div>
+
+              <div class="form-status" role="status" tabindex="-1" hidden>Thank you, a care coordinator will contact you within one business day.</div>
+            </form>
+          </div>
+
+          <aside aria-label="Contact information" style="display:grid;gap:var(--space-5)">
+            <div class="card">
+              <h2 style="font-size:var(--fs-xl)">Contact information</h2>
+              <h3 style="margin-bottom:var(--space-1)">Phone</h3>
+              <p><a href="tel:+15550100123">(555) 010-0123</a></p>
+              <h3 style="margin-bottom:var(--space-1)">Email</h3>
+              <p><a href="mailto:hello@example.com">hello@example.com</a><br><span class="small muted">For general questions only. Please don't email health details.</span></p>
+              <h3 style="margin-bottom:var(--space-1)">Address</h3>
+              <address style="font-style:normal;margin-bottom:var(--space-4)">Clinic Ready Behavioral Health<br>123 Placeholder Ave, Suite 200<br>Your City, ST 00000</address>
+              <h3 style="margin-bottom:var(--space-1)">Hours</h3>
+              <p>Mon–Fri 8am–7pm<br>Sat 9am–1pm<br>Sun closed</p>
+              <h3 style="margin-bottom:var(--space-1)">Parking &amp; transit</h3>
+              <p>[Placeholder: describe parking (e.g. free lot behind the building), the nearest bus or rail stop, and accessible entrance details.]</p>
+            </div>
+
+            <div class="card card--plain" style="padding:0;overflow:hidden">
+              <div role="img" aria-label="Map placeholder showing the clinic location at 123 Placeholder Ave, Suite 200" style="aspect-ratio:4/3;display:grid;place-items:center;text-align:center;padding:var(--space-5);background:repeating-linear-gradient(45deg, var(--color-primary-light), var(--color-primary-light) 14px, var(--color-surface-alt) 14px, var(--color-surface-alt) 28px);color:var(--color-primary-dark)">
+                <p style="margin:0;font-weight:600">Map placeholder<br><span class="small" style="font-weight:400">Replace with a static map image or privacy-friendly embed before launch.</span></p>
+              </div>
+              <p style="padding:var(--space-4) var(--space-5);margin:0"><a href="https://www.openstreetmap.org/search?query=123%20Placeholder%20Ave">Get directions</a> <span class="small muted">(opens a map site)</span></p>
+            </div>
+
+            <div class="card card--accent">
+              <h2 style="font-size:var(--fs-xl)">Prefer to call?</h2>
+              <p>Our care coordinators can answer questions, check your insurance and help you schedule, all in one short call.</p>
+              <p><a class="btn btn--primary" href="tel:+15550100123">Call (555) 010-0123</a></p>
+              <p class="small muted">Mon–Fri 8am–7pm · Sat 9am–1pm. After hours, leave a message and we'll call you back the next business day.</p>
+            </div>
+          </aside>
+
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ===== FOOTER (shared — keep identical on every page) ===== -->
+  <footer class="site-footer">
+    <div class="container">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <a class="brand" href="index.html">
+            <svg class="brand__mark" viewBox="0 0 40 40" aria-hidden="true"><circle cx="20" cy="20" r="20" fill="#2f6b5f"/><path d="M11 24c3-7 6-10 9-10s6 3 9 10" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round"/><circle cx="20" cy="27" r="2.4" fill="#c9774a"/></svg>
+            <span class="brand__name">Clinic Ready<span>Behavioral Health</span></span>
+          </a>
+          <p style="margin-top:var(--space-4)">Compassionate, evidence-based mental health care for adults, teens and families.</p>
+        </div>
+        <div>
+          <h2>Care</h2>
+          <ul>
+            <li><a href="services.html">Services</a></li>
+            <li><a href="approach.html">Our Approach</a></li>
+            <li><a href="team.html">Our Team</a></li>
+            <li><a href="services.html#telehealth">Telehealth</a></li>
+          </ul>
+        </div>
+        <div>
+          <h2>Patients</h2>
+          <ul>
+            <li><a href="new-patients.html">New Patients</a></li>
+            <li><a href="insurance.html">Insurance &amp; Fees</a></li>
+            <li><a href="crisis.html">Crisis Resources</a></li>
+            <li><a href="privacy.html">Privacy &amp; Notice of Practices</a></li>
+          </ul>
+        </div>
+        <div>
+          <h2>Visit</h2>
+          <address style="font-style:normal">
+            123 Placeholder Ave, Suite 200<br>Your City, ST 00000<br>
+            <a href="tel:+15550100123">(555) 010-0123</a><br>
+            <a href="mailto:hello@example.com">hello@example.com</a>
+          </address>
+          <p class="small" style="margin-top:var(--space-3)">Mon–Fri 8am–7pm · Sat 9am–1pm</p>
+        </div>
+      </div>
+      <div class="footer-crisis">
+        <strong>If you are in crisis:</strong> call or text <a href="tel:988">988</a> or chat at <a href="https://988lifeline.org">988lifeline.org</a>. For emergencies call <a href="tel:911">911</a> or go to the nearest emergency room. Please don't use our contact form or email for urgent needs.
+      </div>
+      <div class="footer-bottom">
+        <span>© <span data-year>2026</span> Clinic Ready Behavioral Health. All rights reserved.</span>
+        <span><a href="privacy.html">Privacy</a> · <a href="privacy.html#accessibility">Accessibility</a> · <a href="privacy.html#nondiscrimination">Non-discrimination</a></span>
+      </div>
+    </div>
+  </footer>
+
+  <script src="assets/js/main.js" defer></script>
+</body>
+</html>
