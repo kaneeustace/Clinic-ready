@@ -36,9 +36,17 @@ function isLocked(u) {
   return !!u.is_locked;
 }
 
-const USER_COLS = `id, email, name, credentials, role, npi, active, failed_logins, locked_until, last_login_at, created_at,
+const USER_COLS = `id, email, name, credentials, role, npi, education_level, active, failed_logins, locked_until, last_login_at, created_at,
   mfa_enabled, mfa_enrolled_at, mfa_recovery, password_changed_at, (mfa_secret IS NOT NULL) AS mfa_started,
   (locked_until IS NOT NULL AND locked_until > datetime('now')) AS is_locked`;
+
+// AHCCCS education-level modifier (HM < bachelor, HN bachelor, HO master, HP doctoral). Empty = derive from credentials.
+const EDU_LEVELS = ["HM", "HN", "HO", "HP"];
+const EDU_OPTIONS = [
+  { value: "", label: "Auto (from credentials)" }, { value: "HM", label: "HM · less than bachelor's" },
+  { value: "HN", label: "HN · bachelor's" }, { value: "HO", label: "HO · master's" }, { value: "HP", label: "HP · doctoral" },
+];
+const eduField = (v) => html`<label for="education_level">Education level for AHCCCS modifiers ${select("education_level", EDU_OPTIONS, v.education_level || "")}<span class="hint">Used to suggest HM/HN/HO/HP on AHCCCS HCPCS charges.</span></label>`;
 
 function mfaBadge(u) {
   if (u.mfa_enabled === 1) return badge("active", "On");
@@ -159,6 +167,7 @@ function newUserForm(req, v = {}, errors = []) {
           <label for="role">Role ${select("role", ROLE_OPTIONS, v.role || "clinician")}</label>
           <label>Credentials <span class="hint">e.g. LCSW, MD</span><input name="credentials" value="${v.credentials || ""}" maxlength="60"></label>
           <label>NPI <span class="hint">10 digits, optional</span><input name="npi" value="${v.npi || ""}" inputmode="numeric" pattern="\\d{10}" maxlength="10"></label>
+          ${eduField(v)}
           <label>Initial password <span class="hint">12+ characters, 3 of: lowercase, uppercase, number, symbol</span>
             <input type="password" name="password" required minlength="12" autocomplete="new-password"></label>
         </div>
@@ -172,7 +181,7 @@ router.get("/admin/users/new", adminOnly, (req, res) => res.send(newUserForm(req
 router.post("/admin/users", adminOnly, (req, res) => {
   const v = {
     name: str(req.body.name), email: str(req.body.email).toLowerCase(), role: str(req.body.role),
-    credentials: str(req.body.credentials), npi: str(req.body.npi),
+    credentials: str(req.body.credentials), npi: str(req.body.npi), education_level: str(req.body.education_level).toUpperCase(),
   };
   const password = typeof req.body.password === "string" ? req.body.password : "";
   const errors = [];
@@ -181,13 +190,14 @@ router.post("/admin/users", adminOnly, (req, res) => {
   else if (req.db.prepare("SELECT 1 FROM users WHERE email = ?").get(v.email)) errors.push("A user with that email already exists.");
   if (!ROLES.includes(v.role)) errors.push("Choose a valid role.");
   if (v.npi && !/^\d{10}$/.test(v.npi)) errors.push("NPI must be exactly 10 digits.");
+  if (v.education_level && !EDU_LEVELS.includes(v.education_level)) errors.push("Choose a valid education level.");
   const pwErr = passwordPolicyError(password);
   if (pwErr) errors.push(pwErr);
   if (errors.length) return res.status(400).send(newUserForm(req, v, errors));
 
   const id = Number(req.db.prepare(
-    "INSERT INTO users (email, name, role, credentials, npi, password_hash, password_changed_at) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))"
-  ).run(v.email, v.name, v.role, v.credentials || null, v.npi || null, hashPassword(password)).lastInsertRowid);
+    "INSERT INTO users (email, name, role, credentials, npi, education_level, password_hash, password_changed_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))"
+  ).run(v.email, v.name, v.role, v.credentials || null, v.npi || null, v.education_level || null, hashPassword(password)).lastInsertRowid);
   audit(req, "create", "user", id, null, `role=${v.role}`);
   req.flash("success", `User ${v.name} created.`);
   res.redirect("/ehr/admin/users");
@@ -211,6 +221,7 @@ function editUserForm(req, user, v = user, errors = []) {
             <label for="role">Role ${select("role", ROLE_OPTIONS, v.role)}</label>
             <label>Credentials <input name="credentials" value="${v.credentials || ""}" maxlength="60"></label>
             <label>NPI <span class="hint">10 digits, optional</span><input name="npi" value="${v.npi || ""}" inputmode="numeric" pattern="\\d{10}" maxlength="10"></label>
+            ${eduField(v)}
             <label for="active">Status ${select("active", [{ value: "1", label: "Active" }, { value: "0", label: "Inactive (cannot sign in)" }], String(v.active))}</label>
           </div>
           ${self ? html`<p class="hint">You can't deactivate your own account or remove your own admin role.</p>` : ""}
@@ -265,24 +276,25 @@ router.post("/admin/users/:id/edit", adminOnly, (req, res) => {
   if (!user) return notFound(req, res, "User");
   const v = {
     name: str(req.body.name), role: str(req.body.role), credentials: str(req.body.credentials),
-    npi: str(req.body.npi), active: str(req.body.active) === "0" ? 0 : 1,
+    npi: str(req.body.npi), active: str(req.body.active) === "0" ? 0 : 1, education_level: str(req.body.education_level).toUpperCase(),
   };
   const errors = [];
   if (!v.name) errors.push("Name is required.");
   if (!ROLES.includes(v.role)) errors.push("Choose a valid role.");
   if (v.npi && !/^\d{10}$/.test(v.npi)) errors.push("NPI must be exactly 10 digits.");
+  if (v.education_level && !EDU_LEVELS.includes(v.education_level)) errors.push("Choose a valid education level.");
   if (user.id === req.user.id) {
     if (v.active === 0) errors.push("You can't deactivate your own account.");
     if (v.role !== "admin") errors.push("You can't remove your own admin role.");
   }
   if (errors.length) return res.status(400).send(editUserForm(req, user, v, errors));
 
-  req.db.prepare("UPDATE users SET name = ?, role = ?, credentials = ?, npi = ?, active = ? WHERE id = ?")
-    .run(v.name, v.role, v.credentials || null, v.npi || null, v.active, user.id);
+  req.db.prepare("UPDATE users SET name = ?, role = ?, credentials = ?, npi = ?, education_level = ?, active = ? WHERE id = ?")
+    .run(v.name, v.role, v.credentials || null, v.npi || null, v.education_level || null, v.active, user.id);
   const changes = [];
   if (user.role !== v.role) changes.push(`role ${user.role}->${v.role}`);
   if (user.active !== v.active) changes.push(v.active ? "activated" : "deactivated");
-  if (user.name !== v.name || (user.credentials || "") !== v.credentials || (user.npi || "") !== v.npi) changes.push("profile");
+  if (user.name !== v.name || (user.credentials || "") !== v.credentials || (user.npi || "") !== v.npi || (user.education_level || "") !== v.education_level) changes.push("profile");
   audit(req, "update", "user", user.id, null, changes.join("; ") || "no changes");
   if (user.active === 1 && v.active === 0) {
     const n = req.db.prepare("DELETE FROM sessions WHERE user_id = ?").run(user.id).changes;

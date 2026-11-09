@@ -8,6 +8,7 @@ const { requirePerm, forbidden } = require("../auth");
 const { can } = require("../permissions");
 const { audit } = require("../audit");
 const { tx, nextMrn } = require("../db");
+const { isAhcccs } = require("../payers");
 const {
   html, raw, page, chartPage, notFound, csrfField, badge, getPatient, patientName,
   today, nowLocal, fmtDate, fmtDateTime, age, money, parseMoney, humanize,
@@ -66,6 +67,20 @@ const SEX_OPTIONS = [
   { value: "", label: "Not recorded" }, { value: "female", label: "Female" }, { value: "male", label: "Male" },
   { value: "intersex", label: "Intersex" }, { value: "unknown", label: "Unknown / declined" },
 ];
+// Administrative gender as reported on AHCCCS member demographics / 837 claims (M/F/U).
+const GENDER_OPTIONS = [
+  { value: "", label: "Not recorded" }, { value: "F", label: "Female" }, { value: "M", label: "Male" }, { value: "U", label: "Unknown / not specified" },
+];
+const AHCCCS_ID_RE = /^[A-Z]\d{8}$/;
+/*
+ * Payer-name suggestions for the insurance form. AHCCCS health plans change with contract cycles:
+ * VERIFY this list against the current AHCCCS contracts (and keep src/payers.js AHCCCS_PLANS in step).
+ */
+const PAYER_SUGGESTIONS = [
+  "Mercy Care", "Banner University Health Plans", "Arizona Complete Health – Complete Care Plan",
+  "UnitedHealthcare Community Plan", "Care1st", "Health Choice / AzCH", "Molina Complete Care of Arizona",
+  "AHCCCS Fee-for-Service", "AIHP – American Indian Health Program", "DCS CHP",
+];
 const CONTACT_OPTIONS = [
   { value: "", label: "No preference" }, { value: "phone", label: "Phone call" },
   { value: "text", label: "Text message" }, { value: "email", label: "Email" },
@@ -113,7 +128,7 @@ function clinicianOptions(db, currentId) {
 
 const PATIENT_FIELDS = ["first_name", "last_name", "preferred_name", "dob", "sex_at_birth", "gender_identity", "pronouns",
   "phone", "email", "address_line1", "address_line2", "city", "state", "zip", "preferred_contact", "emergency_name",
-  "emergency_relation", "emergency_phone", "primary_clinician_id", "status"];
+  "emergency_relation", "emergency_phone", "primary_clinician_id", "status", "ahcccs_id", "gender"];
 
 /** Validate the patient form. Returns { values (for re-render), errors, data (for DB) }. */
 function validatePatient(db, body, { current = null } = {}) {
@@ -136,6 +151,10 @@ function validatePatient(db, body, { current = null } = {}) {
   else if (values.dob > today()) errors.dob = "Date of birth can't be in the future.";
   else if (values.dob < "1900-01-01") errors.dob = "Date of birth must be after 1900.";
 
+  values.ahcccs_id = values.ahcccs_id.replace(/\s+/g, "").toUpperCase();
+  if (values.ahcccs_id && !AHCCCS_ID_RE.test(values.ahcccs_id)) errors.ahcccs_id = "AHCCCS ID is a letter followed by 8 digits, e.g. A12345678.";
+  values.gender = values.gender.toUpperCase();
+  if (values.gender && !GENDER_OPTIONS.some((o) => o.value === values.gender)) errors.gender = "Choose an option from the list.";
   if (values.sex_at_birth && !SEX_OPTIONS.some((o) => o.value === values.sex_at_birth)) errors.sex_at_birth = "Choose an option from the list.";
 
   const phone = normalizePhone(values.phone);
@@ -180,6 +199,7 @@ function validatePatient(db, body, { current = null } = {}) {
     preferred_contact: orNull(values.preferred_contact), ok_voicemail: values.ok_voicemail ? 1 : 0,
     emergency_name: orNull(values.emergency_name), emergency_relation: orNull(values.emergency_relation),
     emergency_phone: orNull(values.emergency_phone), primary_clinician_id: clinicianId, status: values.status,
+    ahcccs_id: orNull(values.ahcccs_id), gender: orNull(values.gender),
   };
   return { values, errors, data };
 }
@@ -254,6 +274,8 @@ function patientForm(req, { values, errors, patient = null, duplicate = null }) 
           ${selectField(f, "sex_at_birth", "Sex assigned at birth", SEX_OPTIONS)}
           ${field(f, "gender_identity", "Gender identity", { attrs: 'maxlength="120"' })}
           ${field(f, "pronouns", "Pronouns", { hint: "e.g. she/her, he/him, they/them", attrs: 'maxlength="120"' })}
+          ${selectField(f, "gender", "Gender (claims / AHCCCS demographics)", GENDER_OPTIONS)}
+          ${field(f, "ahcccs_id", "AHCCCS ID", { hint: "Arizona Medicaid member ID, e.g. A12345678. Turns on AHCCCS documentation and billing rules.", attrs: 'maxlength="12" autocomplete="off"' })}
         </div>
       </fieldset>
       <fieldset>
@@ -535,13 +557,14 @@ function renderOverview(req, res, patient, state = null, status = 200) {
   audit(req, "view", "patient", pid, pid);
 
   const dash = html`<span class="muted">Not recorded</span>`;
+  const ahcccs = isAhcccs(db, pid);
   const addr = [patient.address_line1, patient.address_line2,
     [patient.city, [patient.state, patient.zip].filter(Boolean).join(" ")].filter(Boolean).join(", ")].filter(Boolean);
 
   /* --- Demographics & contact --- */
   const demographics = html`
     <section class="card" aria-labelledby="demo-h">
-      <div class="card__head"><h2 id="demo-h">Demographics</h2>
+      <div class="card__head"><h2 id="demo-h">Demographics${ahcccs ? html` <span class="pill" title="AHCCCS (Arizona Medicaid) documentation and billing rules apply">AHCCCS</span>` : ""}</h2>
         ${canPtWrite ? html`<a class="btn btn--sm" href="/ehr/patients/${pid}/edit">Edit</a>` : ""}</div>
       <dl class="facts">
         <dt>Legal name</dt><dd>${patient.first_name} ${patient.last_name}</dd>
@@ -550,6 +573,8 @@ function renderOverview(req, res, patient, state = null, status = 200) {
         <dt>Sex at birth</dt><dd>${patient.sex_at_birth ? (SEX_OPTIONS.find((o) => o.value === patient.sex_at_birth) || {}).label || patient.sex_at_birth : dash}</dd>
         <dt>Gender identity</dt><dd>${patient.gender_identity || dash}</dd>
         <dt>Pronouns</dt><dd>${patient.pronouns || dash}</dd>
+        <dt>Gender (claims)</dt><dd>${patient.gender ? (GENDER_OPTIONS.find((o) => o.value === patient.gender) || {}).label || patient.gender : dash}</dd>
+        <dt>AHCCCS ID</dt><dd>${patient.ahcccs_id || dash}</dd>
         <dt>MRN</dt><dd>${patient.mrn}</dd>
         <dt>Primary clinician</dt><dd>${clinician ? `${clinician.name}${clinician.credentials ? `, ${clinician.credentials}` : ""}` : html`<span class="muted">Unassigned</span>`}</dd>
         <dt>Status</dt><dd>${badge(patient.status)}</dd>
@@ -605,7 +630,8 @@ function renderOverview(req, res, patient, state = null, status = 200) {
             ${errorSummary(insF.errors)}
             <div class="form-grid">
               ${selectField(insF, "priority", "Priority", [{ value: "primary", label: "Primary" }, { value: "secondary", label: "Secondary" }], { required: true })}
-              ${field(insF, "payer_name", "Payer name", { required: true, attrs: 'maxlength="120"' })}
+              ${field(insF, "payer_name", "Payer name", { required: true, hint: "Type or pick; AHCCCS health plans are listed.", attrs: 'maxlength="120" list="payer-suggestions" autocomplete="off"' })}
+              <datalist id="payer-suggestions">${PAYER_SUGGESTIONS.map((n) => html`<option value="${n}"></option>`)}</datalist>
               ${field(insF, "member_id", "Member ID", { attrs: 'maxlength="60"' })}
               ${field(insF, "group_number", "Group number", { attrs: 'maxlength="60"' })}
               ${field(insF, "subscriber_name", "Subscriber name", { attrs: 'maxlength="120"' })}
@@ -766,6 +792,7 @@ function renderOverview(req, res, patient, state = null, status = 200) {
     </section>` : "";
 
   res.status(status).send(chartPage(req, patient, "overview", html`
+    ${ahcccs ? html`<p class="row" data-ahcccs><span class="pill">AHCCCS</span> <span class="small muted">Arizona Medicaid member${patient.ahcccs_id ? ` · ID ${patient.ahcccs_id}` : ""}. AHCCCS documentation, service plan and billing rules apply.</span></p>` : ""}
     <div class="grid grid--2">${demographics}${contact}</div>
     ${allergyCard}
     ${dxCard}

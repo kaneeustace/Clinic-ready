@@ -35,6 +35,14 @@ const FEES = [
   ["99213", "Office/outpatient visit, established, low complexity", 12000],
   ["99214", "Office/outpatient visit, established, moderate complexity", 17000],
   ["96127", "Brief emotional/behavioral assessment", 1500],
+  // AHCCCS (Arizona Medicaid) HCPCS codes. PLACEHOLDER fees: load the current AHCCCS / health-plan fee schedule.
+  // Per-15-minute codes are listed in TIMED_15 in src/routes/billing.js.
+  ["H0004", "Behavioral health counseling and therapy, per 15 min", 3000],
+  ["H0031", "Mental health assessment by non-physician", 15000],
+  ["H2014", "Skills training and development, per 15 min", 2000],
+  ["H2017", "Psychosocial rehabilitation services, per 15 min", 2000],
+  ["H0038", "Self-help/peer services, per 15 min", 1800],
+  ["T1016", "Case management, per 15 min", 2200],
 ];
 
 // Synthetic patients (fictional).

@@ -39,6 +39,7 @@ const { audit } = require("../audit");
 const { tx } = require("../db");
 const { INSTRUMENTS, isDate, str, intId, errorList } = require("./clinical");
 const { ICD10_COMMON } = require("./patients");
+const { isAhcccs } = require("../payers");
 const {
   html, raw, page, chartPage, notFound, csrfField, select, getPatient, patientName,
   today, addDays, fmtDate, fmtTimestamp, age, humanize,
@@ -176,6 +177,71 @@ function snapshotDiagnoses(db, patientId) {
 function planDx(plan) {
   try { const v = JSON.parse(plan.diagnoses || "[]"); return Array.isArray(v) ? v : []; } catch { return []; }
 }
+/* ---------------- AHCCCS (Arizona Medicaid) service plan rules, see docs/ahcccs-spec.md §C ---------------- */
+const AHCCCS_MAX_AGE_DAYS = 365; // edit MD466: assessment and plan no more than 1 year old on the date of service
+const PEER_OPTIONS = [
+  { value: "", label: "Not documented" }, { value: "accepted", label: "Offered and accepted" },
+  { value: "declined", label: "Offered and declined" }, { value: "not_offered", label: "Not offered (explain in team members / summary)" },
+];
+const AHCCCS_FIELDS = [
+  ["team_members", "Team members (Child and Family Team / Adult Recovery Team) and roles", 3],
+  ["crisis_contacts", "Crisis contacts", 2],
+  ["court_ordered", "Court-ordered treatment (if any)", 2],
+  ["smi_agreement", "SMI members: agreement or disagreement with the plan (Attachment A)", 2],
+];
+const AHCCCS_COLS = [...AHCCCS_FIELDS.map(([k]) => k), "peer_support_offered"];
+const daysBetween = (a, b) => Math.round((Date.parse(b + "T12:00:00Z") - Date.parse(a + "T12:00:00Z")) / 86400000);
+const ageOn = (dob, ymd) => {
+  const [y, m, d] = dob.split("-").map(Number), [Y, M, D] = ymd.split("-").map(Number);
+  return Y - y - (M < m || (M === m && D < d) ? 1 : 0);
+};
+
+/** Date (YYYY-MM-DD) a plan was last affirmed on or before `asOf`: activation or the most recent signed review. */
+function planEffectiveDate(db, plan, asOf = today()) {
+  const act = plan.activated_at ? String(plan.activated_at).slice(0, 10) : null;
+  const rev = db.prepare(`SELECT MAX(review_date) AS d FROM plan_reviews WHERE plan_id = ? AND signed_at IS NOT NULL AND review_date <= ?`).get(plan.id, asOf).d;
+  return [act, rev].filter(Boolean).sort().pop() || null;
+}
+/** Most recent signed intake (assessment) note date on or before `asOf`. */
+function lastSignedIntake(db, patientId, asOf = today()) {
+  const r = db.prepare(`SELECT MAX(COALESCE(service_date, substr(signed_at, 1, 10))) AS d FROM notes
+    WHERE patient_id = ? AND type = 'intake' AND status = 'signed' AND COALESCE(service_date, substr(signed_at, 1, 10)) <= ?`).get(patientId, asOf);
+  return r ? r.d : null;
+}
+/** The plan in effect on a date of service (activated on/before it, not ended before it). */
+function planInEffectOn(db, patientId, dos) {
+  return db.prepare(`SELECT * FROM treatment_plans WHERE patient_id = ? AND status IN ('active','superseded','completed')
+    AND activated_at IS NOT NULL AND substr(activated_at, 1, 10) <= ? AND (ended_at IS NULL OR substr(ended_at, 1, 10) >= ? OR status = 'active')
+    ORDER BY activated_at DESC, id DESC LIMIT 1`).get(patientId, dos, dos) || null;
+}
+const hasGuardianSignature = (db, planId) =>
+  !!db.prepare("SELECT 1 FROM plan_signatures WHERE plan_id = ? AND role = 'guardian' AND declined = 0").get(planId);
+
+/**
+ * AHCCCS claim-time documentation check for a date of service (edits MD466, MD454).
+ * Returns an array of blocking error messages (empty = OK).
+ */
+function ahcccsDocumentationErrors(db, patient, dos) {
+  const errors = [];
+  const plan = planInEffectOn(db, patient.id, dos);
+  if (!plan) {
+    errors.push(`AHCCCS edit MD466: no active Service Plan was in effect on the date of service (${dos}).`);
+  } else {
+    const eff = planEffectiveDate(db, plan, dos);
+    if (!eff || daysBetween(eff, dos) > AHCCCS_MAX_AGE_DAYS) {
+      errors.push(`AHCCCS edit MD466: the Service Plan was last activated or reviewed ${eff || "never"}, more than 1 year before the date of service (${dos}). Review or renew the plan.`);
+    }
+    if (patient.dob && ageOn(patient.dob, dos) < 18 && !hasGuardianSignature(db, plan.id)) {
+      errors.push("AHCCCS edit MD454: the member was under 18 on the date of service and the Service Plan has no parent/guardian signature.");
+    }
+  }
+  const intake = lastSignedIntake(db, patient.id, dos);
+  if (!intake || daysBetween(intake, dos) > AHCCCS_MAX_AGE_DAYS) {
+    errors.push(`AHCCCS edit MD466: no signed assessment (intake) within 1 year before the date of service (${dos})${intake ? `; the last one was ${intake}` : ""}.`);
+  }
+  return errors;
+}
+
 function staffList(db) {
   return db.prepare("SELECT id, name, credentials FROM users WHERE active = 1 AND role IN ('clinician','admin') ORDER BY name").all();
 }
@@ -262,7 +328,8 @@ function copyPlan(db, src, authorId) {
   const HEADER = ["plan_type", "diagnoses", "summary", "strengths", "barriers", "client_vision", "needs", "abilities", "preferences",
     "natural_supports", "family_involvement", "service_summary", "modality_rationale", "estimated_duration", "expected_outcome",
     "discharge_criteria", "aftercare_referrals", "safety_plan_note_id", "review_interval_days", "level_of_care", "loc_indicated",
-    "loc_adjusted", "loc_reason", "continued_stay", "mat_plan", "drug_testing_plan", "relapse_prevention", "recovery_supports"];
+    "loc_adjusted", "loc_reason", "continued_stay", "mat_plan", "drug_testing_plan", "relapse_prevention", "recovery_supports",
+    "court_ordered", "team_members", "peer_support_offered", "crisis_contacts", "smi_agreement"];
   const version = db.prepare("SELECT COALESCE(MAX(version), 0) + 1 AS v FROM treatment_plans WHERE patient_id = ?").get(src.patient_id).v;
   const id = Number(db.prepare(
     `INSERT INTO treatment_plans (patient_id, author_id, status, version, supersedes_id, ${HEADER.join(", ")})
@@ -306,7 +373,18 @@ function activationCheck(db, plan, patient) {
   if (!has("clinician")) errors.push("Clinician signature is required.");
   if (!has("client")) errors.push("Client signature, or a documented reason the client declined or was unable to sign, is required.");
   if (reqSupervisor() && !has("supervisor")) errors.push("Supervisor co-signature is required by this clinic's settings.");
-  if (age(patient.dob) < 18 && !has("guardian")) warnings.push("The client is under 18. Obtain a parent/guardian signature (or document why not).");
+  const ahcccs = isAhcccs(db, patient.id);
+  if (ahcccs) {
+    if (age(patient.dob) < 18 && !sigs.some((s) => s.role === "guardian" && !s.declined)) {
+      errors.push("AHCCCS: the member is under 18, so a parent/guardian signature is required (edit MD454). A documented decline does not satisfy it.");
+    }
+    if (!plan.safety_plan_note_id) errors.push("AHCCCS: link the member's trauma-informed safety plan.");
+    if (!plan.crisis_contacts) errors.push("AHCCCS: record crisis contacts.");
+    if (!plan.peer_support_offered) errors.push("AHCCCS: document whether a peer or family support partner was offered.");
+    else if (plan.peer_support_offered === "not_offered") warnings.push("AHCCCS expects a documented offer of a peer or family support partner.");
+    if (!plan.team_members) warnings.push("AHCCCS: list the member's chosen team (Child and Family Team / Adult Recovery Team).");
+    if (iv > AHCCCS_MAX_AGE_DAYS) errors.push("AHCCCS: the review interval can't exceed 365 days.");
+  } else if (age(patient.dob) < 18 && !has("guardian")) warnings.push("The client is under 18. Obtain a parent/guardian signature (or document why not).");
   const tree = loadTree(db, plan);
   tree.problems.forEach((p) => {
     if (!p.goals.length) warnings.push(`Problem ${p.num} has no goals.`);
@@ -318,7 +396,31 @@ function activationCheck(db, plan, patient) {
   if (!plan.client_vision) warnings.push("The client's vision in their own words isn't recorded (CARF's most-cited planning gap).");
   if (!plan.service_summary) warnings.push("The services summary (type, amount, frequency, duration) is empty; payers expect it.");
   if (!plan.discharge_criteria) warnings.push("Discharge / transition criteria are empty.");
-  return { errors, warnings, chain, sigs };
+  return { errors, warnings, chain, sigs, ahcccs };
+}
+
+/** AHCCCS plan-tab alerts: plan or last signed intake older than 365 days now or within 30 days (MD466). */
+function ahcccsAlerts(db, plan, patient) {
+  const out = [];
+  const t = today();
+  const soon = addDays(t, 30);
+  const msg = "AHCCCS requires an assessment and plan no more than 1 year old on the date of service (edit MD466).";
+  if (plan && plan.status === "active") {
+    const eff = planEffectiveDate(db, plan);
+    if (eff) {
+      const exp = addDays(eff, AHCCCS_MAX_AGE_DAYS);
+      if (exp < t) out.push({ tone: "error", strong: "Service Plan is more than 1 year old.", text: `Last activated or reviewed ${fmtDate(eff)}. ${msg}` });
+      else if (exp <= soon) out.push({ tone: "warn", strong: "Service Plan turns 1 year old soon.", text: `It expires for billing on ${fmtDate(exp)}. ${msg}` });
+    }
+  }
+  const intake = lastSignedIntake(db, patient.id);
+  if (!intake) out.push({ tone: "warn", strong: "No signed assessment on file.", text: msg });
+  else {
+    const exp = addDays(intake, AHCCCS_MAX_AGE_DAYS);
+    if (exp < t) out.push({ tone: "error", strong: "Assessment is more than 1 year old.", text: `Last signed intake ${fmtDate(intake)}. ${msg}` });
+    else if (exp <= soon) out.push({ tone: "warn", strong: "Assessment turns 1 year old soon.", text: `Last signed intake ${fmtDate(intake)}; update it by ${fmtDate(exp)}. ${msg}` });
+  }
+  return out;
 }
 
 /** Plan-level alerts for the plan tab. */
@@ -647,8 +749,9 @@ function renderPlanTab(req, patient, opts = {}) {
   const base = `/ehr/patients/${patient.id}`;
 
   if (!plan) {
+    const ah = isAhcccs(db, patient.id);
     return { plan: null, body: html`
-      <div class="page-head"><h1>Treatment plan</h1>
+      <div class="page-head"><h1>${ah ? "Service Plan (AHCCCS)" : "Treatment plan"}</h1>
         ${writable ? html`<a class="btn btn--primary" href="${base}/treatment-plan/new">New treatment plan</a>` : ""}</div>
       <div class="alert alert--warn" role="status"><strong>No active treatment plan.</strong> Payers expect a signed plan before ongoing therapy.</div>
       <div class="card"><p class="muted">No treatment plan on file.</p></div>` };
@@ -664,6 +767,9 @@ function renderPlanTab(req, patient, opts = {}) {
   const sud = isSud(plan);
   const alerts = planAlerts(db, plan, tree);
   const check = isDraft ? activationCheck(db, plan, patient) : null;
+  const ahcccs = isAhcccs(db, patient.id);
+  if (ahcccs) alerts.push(...ahcccsAlerts(db, plan, patient));
+  const planTitle = ahcccs ? "Service Plan (AHCCCS)" : "Treatment plan";
   const safety = plan.safety_plan_note_id
     ? db.prepare("SELECT id, service_date, created_at FROM notes WHERE id = ? AND patient_id = ?").get(plan.safety_plan_note_id, patient.id) : null;
 
@@ -697,7 +803,7 @@ function renderPlanTab(req, patient, opts = {}) {
 
   const body = html`
     <div class="page-head">
-      <div><h1>Treatment plan <span class="muted">v${plan.version}</span> ${tag(plan.status)}</h1>
+      <div><h1>${planTitle} <span class="muted">v${plan.version}</span> ${tag(plan.status)}</h1>
         <p>${PLAN_TYPE_LABEL[plan.plan_type] || humanize(plan.plan_type)} · Author ${plan.author_name}${plan.author_credentials ? `, ${plan.author_credentials}` : ""}</p></div>
       ${actions}
     </div>
@@ -739,6 +845,12 @@ function renderPlanTab(req, patient, opts = {}) {
           : "Captured when the plan was created; it doesn't change when the problem list does."}</p>
       </section>
     </div>
+
+    ${ahcccs || AHCCCS_COLS.some((k) => plan[k]) ? html`<section class="card" aria-labelledby="pl-ahcccs"><h2 id="pl-ahcccs">AHCCCS service plan requirements</h2>
+      <dl class="facts plan-facts">
+        ${AHCCCS_FIELDS.map(([k, label]) => html`<dt>${label}</dt><dd>${textOr(plan[k])}</dd>`)}
+        <dt>Peer / family support partner</dt><dd>${plan.peer_support_offered ? (PEER_OPTIONS.find((o) => o.value === plan.peer_support_offered) || {}).label || plan.peer_support_offered : muted("Offer not documented")}</dd>
+      </dl></section>` : ""}
 
     ${groupCard(HEADER_GROUPS[0])}
     <div class="grid grid--2">${HEADER_GROUPS.slice(1, 5).map(groupCard)}</div>
@@ -827,7 +939,7 @@ function newPlanPage(req, patient, { values, errors = [], active }) {
           <span class="hint">SUD and co-occurring plans add ASAM level-of-care, MOUD, drug-testing and relapse-prevention sections.</span></label>
         <label for="review_interval_days">Review every (days)
           <input type="number" id="review_interval_days" name="review_interval_days" min="7" max="365" value="${values.review_interval_days}" required>
-          <span class="hint">Default 90. Some programs require 30 (e.g. state SUD rules). Ignored when copying the active plan.</span></label>
+          <span class="hint">${isAhcccs(req.db, patient.id) ? "AHCCCS default 365 (the plan must be no more than 1 year old on the date of service); a shorter interval is allowed. Update after significant life events." : "Default 90. Some programs require 30 (e.g. state SUD rules)."} Ignored when copying the active plan.</span></label>
       </div>
       <div><h3>Diagnoses to snapshot</h3>
         ${dx.length ? html`<ul class="list">${dx.map((d) => html`<li><strong>${d.code}</strong> ${d.description}${d.primary ? " (primary)" : ""}</li>`)}</ul>`
@@ -850,7 +962,8 @@ router.get("/patients/:id/treatment-plan/new", WRITE, (req, res) => {
     return res.redirect(planUrl(draft));
   }
   const active = activePlanFor(req.db, patient.id);
-  res.send(newPlanPage(req, patient, { values: { plan_type: active ? active.plan_type : suggestType(req.db, patient.id), review_interval_days: active ? active.review_interval_days : 90 }, active }));
+  const defIv = isAhcccs(req.db, patient.id) ? AHCCCS_MAX_AGE_DAYS : 90;
+  res.send(newPlanPage(req, patient, { values: { plan_type: active ? active.plan_type : suggestType(req.db, patient.id), review_interval_days: active ? active.review_interval_days : defIv }, active }));
 });
 
 router.post("/patients/:id/treatment-plan", WRITE, (req, res) => {
@@ -864,7 +977,8 @@ router.post("/patients/:id/treatment-plan", WRITE, (req, res) => {
   }
   const active = activePlanFor(db, patient.id);
   const copy = !!active && req.body.copy_from_active !== "0";
-  const values = { plan_type: str(req.body.plan_type, 20) || "mental_health", review_interval_days: str(req.body.review_interval_days, 4) || "90", copy_from_active: copy ? "1" : "0" };
+  const defIv = isAhcccs(db, patient.id) ? String(AHCCCS_MAX_AGE_DAYS) : "90";
+  const values = { plan_type: str(req.body.plan_type, 20) || "mental_health", review_interval_days: str(req.body.review_interval_days, 4) || defIv, copy_from_active: copy ? "1" : "0" };
   const errors = [];
   if (!PLAN_TYPES.some((p) => p.value === values.plan_type)) errors.push("Choose a valid plan type.");
   const iv = /^\d+$/.test(values.review_interval_days) ? Number(values.review_interval_days) : NaN;
@@ -937,6 +1051,10 @@ function headerForm(req, found, { values, errors = [] }) {
             ...notes.map((n) => ({ value: n.id, label: `Safety plan ${fmtDate(n.service_date || n.created_at)} (${n.status})` }))], values.safety_plan_note_id)}
           <span class="hint">Link one when risk is identified (CARF 2.C.4).</span></label>
       </div></section>
+      ${isAhcccs(req.db, patient.id) ? html`<section class="card"><h2>AHCCCS service plan requirements</h2><div class="form-grid">
+        ${AHCCCS_FIELDS.map(field)}
+        <label for="peer_support_offered">Peer / family support partner ${select("peer_support_offered", PEER_OPTIONS, values.peer_support_offered || "")}</label>
+      </div><p class="hint">Required to activate for AHCCCS members: crisis contacts, a linked safety plan, and a documented peer/family support partner offer.</p></section>` : ""}
       ${HEADER_GROUPS.map((g) => html`<section class="card"><h2>${g.title}</h2><div class="form-grid">${g.fields.map(field)}</div>
         ${g.title === "Client's voice" ? html`<p class="hint">Write it the way the client said it, in quotation-ready words.</p>` : ""}</section>`)}
       <section class="card"><h2>Substance use treatment (ASAM) <span class="muted small">SUD and co-occurring plans only</span></h2>
@@ -972,6 +1090,11 @@ function validateHeader(db, plan, body) {
   if (v.loc_indicated && v.loc_adjusted && v.loc_indicated !== v.loc_adjusted && !v.loc_reason) {
     errors.push("Explain why the level of care provided differs from the level indicated.");
   }
+  if (isAhcccs(db, plan.patient_id)) {
+    for (const [k] of AHCCCS_FIELDS) v[k] = str(body[k], 5000) || null;
+    v.peer_support_offered = str(body.peer_support_offered, 20) || null;
+    if (v.peer_support_offered && !PEER_OPTIONS.some((o) => o.value === v.peer_support_offered)) errors.push("Choose a valid peer/family support option.");
+  }
   const sp = str(body.safety_plan_note_id, 12);
   v.safety_plan_note_id = null;
   if (sp) {
@@ -998,7 +1121,8 @@ router.post("/treatment-plans/:planId/edit", WRITE, (req, res) => {
   const { plan, patient } = found;
   const { v, errors } = validateHeader(req.db, plan, req.body);
   if (errors.length) return res.status(400).send(headerForm(req, found, { values: v, errors }));
-  const cols = ["plan_type", "start_date", "review_interval_days", "safety_plan_note_id", "loc_indicated", "loc_adjusted", ...TEXT_FIELDS.map(([k]) => k)];
+  const cols = ["plan_type", "start_date", "review_interval_days", "safety_plan_note_id", "loc_indicated", "loc_adjusted", ...TEXT_FIELDS.map(([k]) => k),
+    ...(isAhcccs(req.db, patient.id) ? AHCCCS_COLS : [])];
   req.db.prepare(`UPDATE treatment_plans SET ${cols.map((c) => `${c} = ?`).join(", ")}, updated_at = datetime('now') WHERE id = ?`)
     .run(...cols.map((c) => v[c]), plan.id);
   audit(req, "update", "treatment_plan", plan.id, patient.id, "plan details updated");
@@ -1473,7 +1597,13 @@ function signPage(req, found, { errors = [], values = {} } = {}) {
           ${item(!!clinicianSig, "Clinician signature")}
           ${item(!!has("client"), "Client signature or documented decline")}
           ${item(!!has("supervisor"), reqSupervisor() ? "Supervisor co-signature (required by clinic settings)" : "Supervisor co-signature", !reqSupervisor())}
-          ${item(!!has("guardian"), minor ? "Parent/guardian signature (client is under 18)" : "Guardian signature", true)}
+          ${check.ahcccs && minor
+            ? item(check.sigs.some((s) => s.role === "guardian" && !s.declined), "Parent/guardian signature (AHCCCS member under 18, edit MD454)")
+            : item(!!has("guardian"), minor ? "Parent/guardian signature (client is under 18)" : "Guardian signature", true)}
+          ${check.ahcccs ? html`
+            ${item(!!plan.safety_plan_note_id, "Safety plan linked (AHCCCS)")}
+            ${item(!!plan.crisis_contacts, "Crisis contacts (AHCCCS)")}
+            ${item(!!plan.peer_support_offered, "Peer/family support partner offer documented (AHCCCS)")}` : ""}
         </ul>
         ${warnList(check.warnings)}
         <form method="post" action="/ehr/treatment-plans/${plan.id}/activate" class="no-print"
@@ -1881,6 +2011,7 @@ router.get("/treatment-plans/:planId/print", READ, (req, res) => {
   const sigs = signaturesFor(db, plan.id);
   const reviews = reviewsFor(db, plan.id);
   const sud = isSud(plan);
+  const ahcccs = isAhcccs(db, patient.id);
   const section = (title, fields) => {
     const rows = fields.filter(([k]) => plan[k]);
     return rows.length ? html`<section class="print-sec"><h2>${title}</h2><dl class="facts plan-facts">${rows.map(([k, l]) => html`<dt>${l}</dt><dd class="prewrap">${plan[k]}</dd>`)}</dl></section>` : "";
@@ -1894,7 +2025,7 @@ router.get("/treatment-plans/:planId/print", READ, (req, res) => {
     <article class="print-sheet">
       <header class="print-head">
         <div><p class="print-org">Clinic Ready · Behavioral Health</p>
-          <h1>Treatment plan</h1>
+          <h1>${ahcccs ? "Service Plan (AHCCCS)" : "Treatment plan"}</h1>
           <p class="muted">Version ${plan.version} · ${humanize(plan.status)} · ${PLAN_TYPE_LABEL[plan.plan_type] || humanize(plan.plan_type)}</p></div>
         <dl class="facts print-patient">
           <dt>Client</dt><dd>${patientName(patient)}</dd>
@@ -1909,6 +2040,8 @@ router.get("/treatment-plans/:planId/print", READ, (req, res) => {
       ${sud ? html`<p class="alert alert--info part2">${PART2_NOTICE}</p>` : ""}
       ${plan.client_vision ? html`<section class="print-sec"><h2>My vision for treatment</h2><blockquote class="plan-quote plan-quote--lg">“${plan.client_vision}”</blockquote></section>` : ""}
       <section class="print-sec"><h2>Diagnoses</h2>${dxList(plan)}</section>
+      ${section("AHCCCS service plan requirements", AHCCCS_FIELDS)}
+      ${plan.peer_support_offered ? html`<section class="print-sec"><dl class="facts plan-facts"><dt>Peer / family support partner</dt><dd>${(PEER_OPTIONS.find((o) => o.value === plan.peer_support_offered) || {}).label || plan.peer_support_offered}</dd></dl></section>` : ""}
       ${HEADER_GROUPS.slice(1, 5).map((g) => section(g.title, g.fields))}
       ${sud ? html`<section class="print-sec"><h2>Substance use treatment (ASAM)</h2><dl class="facts plan-facts">
         <dt>Level of care indicated</dt><dd>${plan.loc_indicated ? ASAM_LEVEL_LABEL[plan.loc_indicated] : "—"}</dd>
@@ -1945,4 +2078,5 @@ router.get("/treatment-plans/:planId/print", READ, (req, res) => {
     </article>` }));
 });
 
-module.exports = { router, activePlanFor, loadTree, copyPlan, snapshotDiagnoses, progressPct, objectiveMeasure, activationCheck, ASAM_DIMS, ASAM_LEVELS };
+module.exports = { router, activePlanFor, loadTree, copyPlan, snapshotDiagnoses, progressPct, objectiveMeasure, activationCheck, ASAM_DIMS, ASAM_LEVELS,
+  ahcccsDocumentationErrors, planEffectiveDate, lastSignedIntake, planInEffectOn, AHCCCS_MAX_AGE_DAYS };

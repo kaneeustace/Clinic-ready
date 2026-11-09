@@ -10,6 +10,8 @@ const { tx } = require("../db");
 const { audit } = require("../audit");
 const { requirePerm } = require("../auth");
 const { can } = require("../permissions");
+const { isAhcccs, unitsFor15, educationModifier } = require("../payers");
+const { ahcccsDocumentationErrors } = require("./plans");
 const {
   html, raw, page, chartPage, notFound, csrfField, select, badge, getPatient, patientName,
   today, nowLocal, addDays, fmtDate, money, parseMoney, humanize,
@@ -31,9 +33,156 @@ const TRANSITION_LABEL = { billed: "Mark billed", paid: "Mark paid", denied: "Ma
 const METHODS = ["card", "cash", "check", "insurance", "adjustment"];
 const METHOD_LABEL = { card: "Card", cash: "Cash", check: "Check", insurance: "Insurance payment", adjustment: "Adjustment (credit)" };
 const PAGE_SIZE = 50;
-const CPT_RE = /^\d{4}[0-9A-Z]$/;
+const CPT_RE = /^(\d{4}[0-9A-Z]|[A-Z]\d{4})$/; // CPT (90837, 0591T) or HCPCS Level II (H0004, T1016)
+const HCPCS_RE = /^[A-Z]\d{4}$/;
+const EM_RE = /^99\d{3}$/;                        // E/M codes: FQ (audio-only) not allowed under AHCCCS
 const ICD_RE = /^[A-Z][0-9][0-9A-Z](\.[0-9A-Z]{1,4})?$/;
 const MODIFIER_RE = /^[0-9A-Z]{2}$/;
+const MAX_MODIFIERS = 4;
+
+/*
+ * AHCCCS (Arizona Medicaid) billing rules. See docs/ahcccs-spec.md §D. AHCCCS updates code tables quarterly:
+ * treat these as configuration and re-verify against the current B2 Matrix and Telehealth Code Set.
+ */
+/** Codes billed per 15 minutes (units = unitsFor15(minutes); edit MD418). */
+const TIMED_15 = new Set(["H0004", "H2014", "H2017", "H0038", "T1016"]);
+/** Codes not confirmed as covered for AHCCCS; flagged (not blocked) when used. */
+const AHCCCS_UNCONFIRMED = new Set(["90839", "90840", "90785"]);
+const POS_OPTIONS = [
+  { value: "11", label: "11 · Office" }, { value: "12", label: "12 · Home" }, { value: "03", label: "03 · School" },
+  { value: "99", label: "99 · Other" }, { value: "02", label: "02 · Telehealth, other than member's home" },
+  { value: "10", label: "10 · Telehealth, in member's home" },
+];
+const POS_CODES = POS_OPTIONS.map((o) => o.value);
+/** Staff who can't bill under their own NPI for AHCCCS (associate-level licenses, BHT, BHPP). */
+const NON_INDEPENDENT_RE = /\b(BHT|BHPP|LAC|LMSW|LAMFT|LASAC|PRSS|CPRSS)\b/i;
+const isNonIndependent = (credentials) => NON_INDEPENDENT_RE.test(String(credentials || ""));
+const FACILITY_NOTE = "Bill under facility NPI; rendering provider in Box 19";
+
+/** Split a stored/entered modifier string ("GT HO", "GT,HO", "GT-HO") into a list. */
+const parseModifiers = (s) => String(s || "").toUpperCase().split(/[\s,;\-]+/).map((x) => x.trim()).filter(Boolean);
+const modSuffix = (m) => { const l = parseModifiers(m); return l.length ? `-${l.join("-")}` : ""; };
+
+function noteContent(note) {
+  if (!note) return {};
+  try { const c = JSON.parse(note.content || "{}"); return c && typeof c === "object" ? c : {}; } catch { return {}; }
+}
+/** Service type of a note: 'group' | 'family_present' | 'family_absent' | 'individual' | ''. */
+function noteServiceType(note) {
+  if (!note) return "";
+  const st = String(noteContent(note).service_type || "").toLowerCase();
+  if (note.type === "group" || /group/.test(st)) return "group";
+  if (/absent|without/.test(st)) return "family_absent";
+  if (/family|present/.test(st)) return "family_present";
+  return st ? "individual" : "";
+}
+/** Telehealth modality: 'audio_video' | 'audio_only' | '' (in person / unknown). */
+function telehealthModality(note, appt) {
+  const m = String(noteContent(note).telehealth_modality || "").toLowerCase();
+  if (/audio[_ -]?only|phone|fq/.test(m)) return "audio_only";
+  if (/video|gt/.test(m)) return "audio_video";
+  if (!m && appt && appt.modality === "telehealth") return "audio_video";
+  return "";
+}
+const hhmm = (t) => (/^\d{1,2}:\d{2}$/.test(String(t || "")) ? Number(t.split(":")[0]) * 60 + Number(t.split(":")[1]) : null);
+/** Documented minutes: the note's session start/end, else the appointment's scheduled length. */
+function minutesFor(note, appt) {
+  const c = noteContent(note);
+  const a = hhmm(c.session_start), b = hhmm(c.session_end);
+  if (a !== null && b !== null && b > a) return b - a;
+  if (appt) {
+    const mins = (new Date(appt.end_at + ":00Z") - new Date(appt.start_at + ":00Z")) / 60000;
+    if (mins > 0) return mins;
+  }
+  return null;
+}
+
+/**
+ * Suggested modifiers for an AHCCCS charge (telehealth GT/FQ, group HQ, H0004 HR/HS, education level).
+ * Returns { modifiers: [...], notes: [...human hints] }. Non-AHCCCS: 95 for telehealth (previous behavior).
+ */
+function suggestModifiers({ ahcccs, cpt = "", note = null, appt = null, provider = null }) {
+  const mods = [], notes = [];
+  const tele = telehealthModality(note, appt);
+  if (!ahcccs) {
+    if (appt && appt.modality === "telehealth") mods.push("95");
+    return { modifiers: mods, notes };
+  }
+  if (tele === "audio_video") { mods.push("GT"); notes.push("GT: audio-video telehealth."); }
+  if (tele === "audio_only") {
+    if (EM_RE.test(cpt)) notes.push("Audio-only telehealth: FQ is not allowed on E/M codes.");
+    else { mods.push("FQ"); notes.push("FQ: audio-only telehealth."); }
+  }
+  const st = noteServiceType(note);
+  if (st === "group" || cpt === "90853") { mods.push("HQ"); notes.push("HQ: group service."); }
+  if (cpt === "H0004" && st === "family_present") { mods.push("HR"); notes.push("HR: family session, member present."); }
+  if (cpt === "H0004" && st === "family_absent") { mods.push("HS"); notes.push("HS: family session, member absent."); }
+  if (provider && (!cpt || HCPCS_RE.test(cpt))) {
+    const edu = educationModifier(provider);
+    if (edu) { if (HCPCS_RE.test(cpt)) mods.push(edu); notes.push(`${edu}: education level of ${provider.name || "the rendering provider"} (HCPCS codes).`); }
+    else notes.push("No education level on file for the rendering provider; set it under Admin → Users for HCPCS modifiers.");
+  }
+  return { modifiers: [...new Set(mods)].slice(0, MAX_MODIFIERS), notes };
+}
+
+/**
+ * Validate a charge's AHCCCS/time fields. Returns { errors: {field: msg}, warnings: [msg], units }.
+ * `units` is the computed unit count for timed codes (else the entered units).
+ */
+function checkChargeRules({ ahcccs, cpt, modifiers, pos, minutes, units, note, appt, provider }) {
+  const errors = {}, warnings = [];
+  let outUnits = units;
+  // 15-minute codes (all payers): units must match documented minutes.
+  if (TIMED_15.has(cpt)) {
+    if (minutes === null) errors.minutes = `${cpt} is billed per 15 minutes: enter the documented minutes.`;
+    else if (minutes < 8) errors.minutes = `${cpt} needs at least 8 documented minutes for one unit (${minutes} documented).`;
+    else {
+      const expected = unitsFor15(minutes);
+      if (units === null) outUnits = expected;
+      else if (units !== expected) errors.units = `${minutes} minutes = ${expected} unit${expected === 1 ? "" : "s"} of ${cpt} (15-minute rule); ${units} entered. Units must match documented minutes (AHCCCS edit MD418).`;
+    }
+  }
+  if (!ahcccs) return { errors, warnings, units: outUnits };
+
+  if (!pos) errors.pos = "AHCCCS: choose the place of service (the member's location).";
+  else if (pos === "02" || pos === "10") errors.pos = "AHCCCS uses member location POS (11 office, 12 home, 03 school, 99 other), not POS 02/10.";
+  const has = (m) => modifiers.includes(m);
+  const tele = telehealthModality(note, appt);
+  if (has("95") || has("93")) errors.modifier = "AHCCCS does not accept modifier 95 or 93; use GT (audio-video) or FQ (audio-only) per the AHCCCS Telehealth Code Set.";
+  else if (has("GT") && has("FQ")) errors.modifier = "Use exactly one telehealth modifier (GT or FQ).";
+  else if (has("FQ") && EM_RE.test(cpt)) errors.modifier = "AHCCCS: FQ (audio-only) is not allowed on E/M codes (99xxx).";
+  else if (tele === "audio_video" && note && has("FQ")) errors.modifier = "The note documents audio-video telehealth: use GT, not FQ.";
+  else if (tele === "audio_only" && note && has("GT")) errors.modifier = "The note documents audio-only telehealth: use FQ, not GT.";
+  else if (tele && !has("GT") && !has("FQ") && !(tele === "audio_only" && EM_RE.test(cpt))) {
+    warnings.push(`Telehealth service without a telehealth modifier: AHCCCS expects ${tele === "audio_only" ? "FQ" : "GT"}.`);
+  }
+  if (!errors.modifier) {
+    const st = noteServiceType(note);
+    if ((st === "group" || cpt === "90853") && !has("HQ")) errors.modifier = "AHCCCS: group services require the HQ modifier.";
+    else if (has("HR") && has("HS")) errors.modifier = "Use HR (member present) or HS (member absent), not both.";
+    else if (cpt === "H0004" && st === "family_present" && !has("HR")) warnings.push("Family session with the member present: AHCCCS expects HR on H0004.");
+    else if (cpt === "H0004" && st === "family_absent" && !has("HS")) warnings.push("Family session without the member: AHCCCS expects HS on H0004.");
+  }
+  if (HCPCS_RE.test(cpt) && provider) {
+    const edu = educationModifier(provider);
+    if (!edu) warnings.push("No education-level modifier (HM/HN/HO/HP) could be determined for the rendering provider; check the B2 Matrix.");
+    else if (!["HM", "HN", "HO", "HP"].some(has)) warnings.push(`Education-level modifier missing: ${provider.name || "the rendering provider"} would bill ${edu}.`);
+  }
+  if (AHCCCS_UNCONFIRMED.has(cpt)) warnings.push(`${cpt} is not confirmed as covered by AHCCCS; verify against the B2 Matrix before billing.`);
+  if (cpt === "H0038" && provider && !/\bC?PRSS\b/i.test(provider.credentials || "")) warnings.push("H0038 (peer support) requires the PRSS credential.");
+  if (!note) warnings.push("Link the signed note that supports this charge; AHCCCS charges can't be billed without one.");
+  return { errors, warnings, units: outUnits };
+}
+
+/** Blocking reasons an AHCCCS charge can't move to 'billed'. */
+function ahcccsBillErrors(db, charge, patient) {
+  const errors = [];
+  const note = charge.note_id ? db.prepare("SELECT * FROM notes WHERE id = ?").get(charge.note_id) : null;
+  if (!note) errors.push("AHCCCS: link the signed progress note that supports this service before billing.");
+  else if (note.status !== "signed") errors.push("AHCCCS: the linked note must be signed before the charge can be billed.");
+  if (!charge.pos) errors.push("AHCCCS: the place of service is missing.");
+  return errors.concat(ahcccsDocumentationErrors(db, patient, charge.date_of_service));
+}
 
 const PRACTICE = {
   name: "Clinic Ready Behavioral Health",
@@ -88,6 +237,14 @@ function unchargedAppointments(db, { patientId = null, limit = 100 } = {}) {
      WHERE a.status = 'completed' AND a.start_at < ? ${patientId ? "AND a.patient_id = ?" : ""}
        AND NOT EXISTS (SELECT 1 FROM charges c WHERE c.appointment_id = a.id AND c.status != 'void')
      ORDER BY a.start_at DESC LIMIT ?`).all(...[nowLocal(), ...(patientId ? [patientId] : []), limit]);
+}
+
+/** Notes that can be linked to a charge: the appointment's notes, else the patient's recent notes. */
+function linkableNotes(db, patientId, appt) {
+  return appt
+    ? db.prepare(`SELECT id, type, status, service_date, signed_at, content FROM notes WHERE patient_id = ? AND appointment_id = ? ORDER BY id DESC`).all(patientId, appt.id)
+    : db.prepare(`SELECT id, type, status, service_date, signed_at, content FROM notes WHERE patient_id = ? AND type NOT IN ('roi','safety_plan')
+        ORDER BY COALESCE(service_date, substr(created_at, 1, 10)) DESC, id DESC LIMIT 30`).all(patientId);
 }
 
 /** Suggested CPT for an appointment, by type and duration. */
@@ -219,7 +376,7 @@ router.get("/billing", read, (req, res) => {
               <tr>
                 <td>${fmtDate(c.date_of_service)}</td>
                 <td><a href="/ehr/patients/${c.patient_id}/billing">${patientName(c)}</a></td>
-                <td>${c.cpt_code}${c.modifier ? `-${c.modifier}` : ""}</td>
+                <td>${c.cpt_code}${modSuffix(c.modifier)}</td>
                 <td class="num">${c.units}</td>
                 <td class="num">${money(c.fee_cents)}</td>
                 <td>${providerName(c)}</td>
@@ -253,7 +410,7 @@ function feeSchedulePage(req, res, { errors = {}, values = {}, status = 200 } = 
           <thead><tr><th>CPT</th><th>Description</th><th class="num">Fee</th><th>Status</th>${isAdmin ? html`<th>Update</th>` : ""}</tr></thead>
           <tbody>${fees.map((f) => html`
             <tr>
-              <td>${f.cpt_code}</td>
+              <td>${f.cpt_code}${TIMED_15.has(f.cpt_code) ? html` <span class="pill" title="Units = unitsFor15(minutes)">per 15 min</span>` : ""}</td>
               <td>${f.description}</td>
               <td class="num">${money(f.fee_cents)}</td>
               <td>${f.active ? badge("active") : badge("inactive")}</td>
@@ -276,7 +433,7 @@ function feeSchedulePage(req, res, { errors = {}, values = {}, status = 200 } = 
             ${csrfField(req)}
             <input type="hidden" name="active" value="1">
             <div class="form-grid">
-              <label>CPT/HCPCS code <input name="cpt_code" value="${values.cpt_code || ""}" maxlength="5" required pattern="[0-9]{4}[0-9A-Za-z]"> ${fieldError(errors, "cpt_code")}</label>
+              <label>CPT/HCPCS code <input name="cpt_code" value="${values.cpt_code || ""}" maxlength="5" required pattern="[0-9]{4}[0-9A-Za-z]|[A-Za-z][0-9]{4}"> ${fieldError(errors, "cpt_code")}</label>
               <label class="span-all">Description <input name="description" value="${values.description || ""}" maxlength="200" required> ${fieldError(errors, "description")}</label>
               <label>Fee ($) <input name="fee" value="${values.fee || ""}" inputmode="decimal" required> ${fieldError(errors, "fee")}</label>
             </div>
@@ -292,7 +449,7 @@ router.post("/billing/fee-schedule", requirePerm("admin"), (req, res) => {
   const db = req.db;
   const values = { cpt_code: str(req.body.cpt_code, 10).toUpperCase(), description: str(req.body.description), fee: str(req.body.fee, 20) };
   const errors = {};
-  if (!CPT_RE.test(values.cpt_code)) errors.cpt_code = "CPT code must be 4 digits followed by a digit or letter (e.g. 90837).";
+  if (!CPT_RE.test(values.cpt_code)) errors.cpt_code = "Code must be a CPT code (4 digits then a digit or letter, e.g. 90837) or a HCPCS code (a letter then 4 digits, e.g. H0004).";
   const fee = parseMoney(values.fee);
   if (fee === null || fee <= 0 || fee > 10000000) errors.fee = "Enter a fee greater than $0.";
   const existing = errors.cpt_code ? null : db.prepare("SELECT * FROM fee_schedule WHERE cpt_code = ?").get(values.cpt_code);
@@ -381,8 +538,8 @@ function ledgerPage(req, res, patient, { errors = {}, values = {}, status = 200 
           <tbody>${rows.map((r) => r.kind === "charge" ? html`
             <tr ${r.c.status === "void" ? raw('class="muted"') : ""}>
               <td>${fmtDate(r.date)}</td>
-              <td>${r.c.cpt_code}${r.c.modifier ? `-${r.c.modifier}` : ""} ${r.c.description ? html`<span class="muted small">${r.c.description}</span>` : ""}</td>
-              <td class="small">${r.c.units > 1 ? `${r.c.units} units · ` : ""}${r.c.diagnosis_codes || ""}${r.c.provider_name ? ` · ${providerName(r.c)}` : ""} · bill ${r.c.bill_to}</td>
+              <td>${r.c.cpt_code}${modSuffix(r.c.modifier)} ${r.c.description ? html`<span class="muted small">${r.c.description}</span>` : ""}</td>
+              <td class="small">${r.c.pos ? `POS ${r.c.pos} · ` : ""}${r.c.minutes != null ? `${r.c.minutes} min · ` : ""}${r.c.units > 1 ? `${r.c.units} units · ` : ""}${r.c.diagnosis_codes || ""}${r.c.provider_name ? ` · ${providerName(r.c)}` : ""} · bill ${r.c.bill_to}</td>
               <td class="num">${r.c.status === "void" ? html`<s>${money(r.c.fee_cents)}</s>` : money(r.c.fee_cents)}</td>
               <td class="num"></td>
               <td class="num">${money(r.balance)}</td>
@@ -449,7 +606,7 @@ router.post("/patients/:id/payments", write, (req, res) => {
 });
 
 /* ---------------- charges ---------------- */
-function chargeForm(req, res, patient, { values = {}, errors = {}, appt = null, status = 200 } = {}) {
+function chargeForm(req, res, patient, { values = {}, errors = {}, appt = null, status = 200, warnings = [] } = {}) {
   const db = req.db;
   const fees = activeFees(db);
   const dx = activeDiagnoses(db, patient.id);
@@ -457,29 +614,48 @@ function chargeForm(req, res, patient, { values = {}, errors = {}, appt = null, 
   const existing = appt ? db.prepare("SELECT cpt_code, status FROM charges WHERE appointment_id = ? AND status != 'void'").all(appt.id) : [];
   const selectedDx = new Set(values.dx || []);
   const hasPolicy = insurance(db, patient.id).length > 0;
+  const ahcccs = isAhcccs(db, patient.id);
+  const notes = linkableNotes(db, patient.id, appt);
+  const noteId = values.note_id !== undefined ? toInt(values.note_id) : ((notes.find((n) => n.status === "signed") || {}).id || null);
+  const note = noteId ? notes.find((n) => n.id === noteId) || null : null;
+  const cpt = values.cpt_code !== undefined ? values.cpt_code : suggestCpt(appt);
+  const provId = values.rendering_provider_id !== undefined ? toInt(values.rendering_provider_id) : (appt ? appt.clinician_id : patient.primary_clinician_id);
+  const provider = provId ? db.prepare("SELECT id, name, credentials, education_level FROM users WHERE id = ?").get(provId) : null;
+  const sugg = suggestModifiers({ ahcccs, cpt, note, appt, provider });
+  const mins = minutesFor(note, appt);
+  const c = noteContent(note);
+  const notePos = POS_CODES.includes(String(c.pos || c.member_location || "")) ? String(c.pos || c.member_location) : "";
   const v = {
     appointment_id: appt ? appt.id : "", date_of_service: appt ? appt.start_at.slice(0, 10) : today(),
-    rendering_provider_id: appt ? appt.clinician_id : (patient.primary_clinician_id || ""),
-    cpt_code: suggestCpt(appt), units: "1", fee: "", modifier: appt && appt.modality === "telehealth" ? "95" : "",
+    rendering_provider_id: provId || "", cpt_code: cpt,
+    units: TIMED_15.has(cpt) && mins ? String(unitsFor15(mins) || 1) : "1", fee: "", modifier: sugg.modifiers.join(" "),
+    pos: notePos || (appt && appt.modality === "in_person" ? "11" : ""), minutes: mins != null ? String(mins) : "", note_id: noteId || "",
     bill_to: hasPolicy ? "insurance" : "patient", dx_other: "", ...values,
   };
   const dxDefault = !values.dx && !values.dx_other; // first render: all active diagnoses checked
+  const noteLabel = (n) => `${humanize(n.type)} · ${fmtDate(n.service_date || String(n.signed_at || "").slice(0, 10))} · ${n.status === "signed" ? "signed" : "UNSIGNED draft"}`;
 
   res.status(status).send(chartPage(req, patient, "billing", html`
-    <div class="page-head"><h2>New charge</h2><a class="btn btn--ghost" href="/ehr/patients/${patient.id}/billing">Cancel</a></div>
+    <div class="page-head"><h2>New charge ${ahcccs ? html`<span class="pill">AHCCCS</span>` : ""}</h2><a class="btn btn--ghost" href="/ehr/patients/${patient.id}/billing">Cancel</a></div>
     ${errorList(errors)}
-    ${appt ? html`<p class="alert alert--info">For the ${humanize(appt.type)} appointment on ${fmtDate(appt.start_at)}.</p>` : ""}
-    ${existing.length ? html`<p class="alert alert--warn">This appointment already has charge(s): ${existing.map((c) => `${c.cpt_code} (${c.status})`).join(", ")}.</p>` : ""}
+    ${warnings.length ? html`<div class="alert alert--warn" role="status"><strong>Check:</strong><ul>${warnings.map((w) => html`<li>${w}</li>`)}</ul></div>` : ""}
+    ${appt ? html`<p class="alert alert--info">For the ${humanize(appt.type)} appointment on ${fmtDate(appt.start_at)}${appt.modality === "telehealth" ? " (telehealth)" : ""}.</p>` : ""}
+    ${existing.length ? html`<p class="alert alert--warn">This appointment already has charge(s): ${existing.map((x) => `${x.cpt_code} (${x.status})`).join(", ")}.</p>` : ""}
+    ${ahcccs ? html`<div class="alert alert--info" role="note"><strong>AHCCCS member.</strong> POS is the member's location (not 02/10); telehealth uses GT (audio-video) or FQ (audio-only), never 95/93; group services need HQ; per-15-minute codes need units that match documented minutes. To bill, the linked note must be signed and a Service Plan and assessment no more than 1 year old must cover the date of service.
+      ${sugg.notes.length ? html`<br>Suggested modifiers: ${sugg.notes.join(" ")}` : ""}</div>` : ""}
     <form class="card" method="post" action="/ehr/patients/${patient.id}/charges">
       ${csrfField(req)}
       ${v.appointment_id ? html`<input type="hidden" name="appointment_id" value="${v.appointment_id}">` : ""}
       <div class="form-grid">
         <label>Date of service <input type="date" name="date_of_service" value="${v.date_of_service}" required> ${fieldError(errors, "date_of_service")}</label>
-        <label>CPT code ${select("cpt_code", [{ value: "", label: "Choose a code" }, ...fees.map((f) => ({ value: f.cpt_code, label: `${f.cpt_code} · ${f.description} · ${money(f.fee_cents)}` }))], v.cpt_code, "required")} ${fieldError(errors, "cpt_code")}</label>
-        <label>Modifier <input name="modifier" value="${v.modifier}" maxlength="2" placeholder="e.g. 95"><span class="hint">95 = telehealth</span> ${fieldError(errors, "modifier")}</label>
-        <label>Units <input type="number" name="units" min="1" max="10" value="${v.units}" required> ${fieldError(errors, "units")}</label>
+        <label>CPT/HCPCS code ${select("cpt_code", [{ value: "", label: "Choose a code" }, ...fees.map((f) => ({ value: f.cpt_code, label: `${f.cpt_code} · ${f.description} · ${money(f.fee_cents)}${TIMED_15.has(f.cpt_code) ? " / unit" : ""}` }))], v.cpt_code, "required")} ${fieldError(errors, "cpt_code")}</label>
+        <label>Modifiers <input name="modifier" value="${v.modifier}" maxlength="20" placeholder="${ahcccs ? "e.g. GT HO" : "e.g. 95"}"><span class="hint">Up to ${MAX_MODIFIERS}, separated by spaces. ${ahcccs ? "GT audio-video · FQ audio-only · HQ group · HR/HS family · HM/HN/HO/HP education" : "95 = telehealth"}</span> ${fieldError(errors, "modifier")}</label>
+        <label>Place of service ${select("pos", [{ value: "", label: ahcccs ? "Choose (member's location)" : "Not specified" }, ...POS_OPTIONS], v.pos)} ${fieldError(errors, "pos")}</label>
+        <label>Minutes <input type="number" name="minutes" min="0" max="1440" value="${v.minutes}"><span class="hint">Documented face-to-face minutes. Per-15-minute codes: 8–22 = 1 unit, 23–37 = 2, 38–52 = 3, 53–67 = 4.</span> ${fieldError(errors, "minutes")}</label>
+        <label>Units <input type="number" name="units" min="1" max="96" value="${v.units}"><span class="hint">Calculated from minutes for per-15-minute codes when left blank.</span> ${fieldError(errors, "units")}</label>
         <label>Fee ($) <input name="fee" value="${v.fee}" inputmode="decimal" placeholder="Fee schedule × units"><span class="hint">Leave blank to use the fee schedule.</span> ${fieldError(errors, "fee")}</label>
         <label>Rendering provider ${select("rendering_provider_id", [{ value: "", label: "Choose a provider" }, ...provs.map((p) => ({ value: p.id, label: `${p.name}${p.credentials ? `, ${p.credentials}` : ""}${p.npi ? ` · NPI ${p.npi}` : ""}` }))], v.rendering_provider_id, "required")} ${fieldError(errors, "rendering_provider_id")}</label>
+        <label>Supporting note ${select("note_id", [{ value: "", label: notes.length ? "None linked" : "No notes for this visit" }, ...notes.map((n) => ({ value: n.id, label: noteLabel(n) }))], v.note_id)}${ahcccs ? html`<span class="hint">Required (and signed) before an AHCCCS charge can be billed.</span>` : ""} ${fieldError(errors, "note_id")}</label>
         <label>Bill to ${select("bill_to", [{ value: "insurance", label: "Insurance" }, { value: "patient", label: "Patient (self-pay)" }], v.bill_to)}</label>
       </div>
       <fieldset style="margin-top:1rem">
@@ -518,31 +694,56 @@ router.post("/patients/:id/charges", write, (req, res) => {
   const b = req.body;
   const dxChecked = [].concat(b.dx || []).map((x) => str(x, 10).toUpperCase()).filter(Boolean);
   const values = {
-    date_of_service: str(b.date_of_service, 10), cpt_code: str(b.cpt_code, 10).toUpperCase(), modifier: str(b.modifier, 2).toUpperCase(),
+    date_of_service: str(b.date_of_service, 10), cpt_code: str(b.cpt_code, 10).toUpperCase(), modifier: str(b.modifier, 40).toUpperCase(),
     units: str(b.units, 4), fee: str(b.fee, 20), rendering_provider_id: str(b.rendering_provider_id, 10),
     bill_to: str(b.bill_to, 10), dx: dxChecked, dx_other: str(b.dx_other, 200),
+    pos: str(b.pos, 2), minutes: str(b.minutes, 5), note_id: str(b.note_id, 12),
   };
   const errors = {};
   const { appt, error: apptError } = loadAppt(db, patient, b.appointment_id);
   if (apptError) errors.appointment_id = apptError;
   if (appt) values.appointment_id = appt.id;
+  const ahcccs = isAhcccs(db, patient.id);
 
   if (!validDate(values.date_of_service)) errors.date_of_service = "Enter a valid date of service.";
   else if (values.date_of_service > today()) errors.date_of_service = "Date of service cannot be in the future.";
   const fee = CPT_RE.test(values.cpt_code) ? feeFor(db, values.cpt_code) : null;
-  if (!fee) errors.cpt_code = "Choose a CPT code from the active fee schedule.";
-  if (values.modifier && !MODIFIER_RE.test(values.modifier)) errors.modifier = "Modifier must be 2 letters or digits.";
-  const units = toInt(values.units);
-  if (!units || units < 1 || units > 10) errors.units = "Units must be between 1 and 10.";
+  if (!fee) errors.cpt_code = "Choose a CPT/HCPCS code from the active fee schedule.";
+  const modifiers = [...new Set(parseModifiers(values.modifier))];
+  if (modifiers.some((m) => !MODIFIER_RE.test(m))) errors.modifier = "Each modifier must be 2 letters or digits.";
+  else if (modifiers.length > MAX_MODIFIERS) errors.modifier = `A charge can have at most ${MAX_MODIFIERS} modifiers.`;
+  if (values.pos && !POS_CODES.includes(values.pos)) errors.pos = "Choose a place of service from the list.";
+  let minutes = null;
+  if (values.minutes !== "") {
+    minutes = /^\d+$/.test(values.minutes) ? Number(values.minutes) : NaN;
+    if (!(minutes >= 0 && minutes <= 1440)) { errors.minutes = "Minutes must be a whole number between 0 and 1440."; minutes = null; }
+  }
+  const timed = TIMED_15.has(values.cpt_code);
+  let units = values.units === "" && timed ? null : toInt(values.units);
+  if (units !== null && (!units || units < 1 || units > (timed ? 96 : 10))) errors.units = `Units must be between 1 and ${timed ? 96 : 10}.`;
+  const provId = toInt(values.rendering_provider_id);
+  const prov = provId ? db.prepare("SELECT id, name, credentials, education_level FROM users WHERE id = ? AND active = 1 AND role = 'clinician'").get(provId) : null;
+  if (!prov) errors.rendering_provider_id = "Choose a rendering provider.";
+  if (!["insurance", "patient"].includes(values.bill_to)) values.bill_to = "insurance";
+  let note = null;
+  if (values.note_id) {
+    const nid = toInt(values.note_id);
+    note = nid ? db.prepare("SELECT * FROM notes WHERE id = ? AND patient_id = ?").get(nid, patient.id) : null;
+    if (!note) errors.note_id = "Choose a note that belongs to this patient.";
+    else if (appt && note.appointment_id && note.appointment_id !== appt.id) errors.note_id = "That note documents a different appointment.";
+  }
+
+  // Time-based units and AHCCCS modifier / POS rules.
+  const rules = checkChargeRules({ ahcccs, cpt: values.cpt_code, modifiers, pos: values.pos, minutes, units, note, appt, provider: prov });
+  for (const [k, msg] of Object.entries(rules.errors)) if (!errors[k]) errors[k] = msg;
+  if (!errors.units && !errors.minutes) units = rules.units;
+  if (units === null && !errors.units && !errors.minutes) errors.units = "Units are required.";
+
   let feeCents = null;
   if (values.fee) {
     feeCents = parseMoney(values.fee);
     if (feeCents === null || feeCents < 0 || feeCents > 10000000) errors.fee = "Enter a valid fee, or leave blank to use the fee schedule.";
   } else if (fee && units) feeCents = fee.fee_cents * units;
-  const provId = toInt(values.rendering_provider_id);
-  const prov = provId ? db.prepare("SELECT id FROM users WHERE id = ? AND active = 1 AND role = 'clinician'").get(provId) : null;
-  if (!prov) errors.rendering_provider_id = "Choose a rendering provider.";
-  if (!["insurance", "patient"].includes(values.bill_to)) values.bill_to = "insurance";
 
   // Diagnosis codes: checked active diagnoses in problem-list order (primary first), then free text.
   const dxOrder = activeDiagnoses(db, patient.id).map((d) => d.icd10_code.toUpperCase());
@@ -554,17 +755,18 @@ router.post("/patients/:id/charges", write, (req, res) => {
   if (!badDx.length && !codes.length) errors.dx = "Add at least one diagnosis code.";
   else if (codes.length > 12) errors.dx = "A charge can have at most 12 diagnosis codes.";
 
-  if (Object.keys(errors).length) return chargeForm(req, res, patient, { values, errors, appt, status: 400 });
+  if (Object.keys(errors).length) return chargeForm(req, res, patient, { values, errors, appt, warnings: rules.warnings, status: 400 });
 
   tx(db, () => {
     const r = db.prepare(
       `INSERT INTO charges (patient_id, appointment_id, date_of_service, cpt_code, modifier, units, fee_cents, diagnosis_codes,
-        rendering_provider_id, bill_to, status, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unbilled', ?)`)
-      .run(patient.id, appt ? appt.id : null, values.date_of_service, values.cpt_code, values.modifier || null, units, feeCents,
-        codes.join(","), prov.id, values.bill_to, req.user.id);
+        rendering_provider_id, bill_to, status, created_by, pos, minutes, note_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unbilled', ?, ?, ?, ?)`)
+      .run(patient.id, appt ? appt.id : null, values.date_of_service, values.cpt_code, modifiers.length ? modifiers.join(" ") : null, units, feeCents,
+        codes.join(","), prov.id, values.bill_to, req.user.id, values.pos || null, minutes, note ? note.id : null);
     audit(req, "create", "charge", Number(r.lastInsertRowid), patient.id, appt ? "from appointment" : "manual");
   });
   req.flash("success", `Charge created for ${money(feeCents)}.`);
+  rules.warnings.forEach((w) => req.flash("warn", w));
   res.redirect(`/ehr/patients/${patient.id}/billing`);
 });
 
@@ -578,11 +780,19 @@ router.post("/charges/:chargeId/status", write, (req, res) => {
   const to = String(req.body.status || "");
   const bad = (msg) => res.status(400).send(page(req, {
     title: "Charge not updated", active: "billing",
-    body: html`<div class="card"><h1>Charge not updated</h1><p>${msg}</p><p><a href="${back}">Go back</a></p></div>`,
+    body: html`<div class="card"><h1>Charge not updated</h1>${Array.isArray(msg) ? html`<ul class="list">${msg.map((m) => html`<li>${m}</li>`)}</ul>` : html`<p>${msg}</p>`}<p><a href="${back}">Go back</a></p></div>`,
   }));
   if (charge.status === "void") return bad("Voided charges cannot be changed.");
   if (!(TRANSITIONS[charge.status] || []).includes(to)) return bad(`A ${charge.status} charge cannot be marked ${humanize(to).toLowerCase() || "that status"}.`);
   if (to === "void" && req.body.confirm !== "yes") return bad("Voiding a charge requires confirmation.");
+  if (to === "billed" && isAhcccs(db, charge.patient_id)) {
+    const patient = db.prepare("SELECT * FROM patients WHERE id = ?").get(charge.patient_id);
+    const errs = ahcccsBillErrors(db, charge, patient);
+    if (errs.length) {
+      audit(req, "bill_blocked", "charge", charge.id, charge.patient_id, `AHCCCS checks failed: ${errs.length}`);
+      return bad(errs);
+    }
+  }
   const r = db.prepare("UPDATE charges SET status = ? WHERE id = ? AND status = ?").run(to, charge.id, charge.status);
   if (r.changes !== 1) return bad("The charge changed while you were working. Reload and try again.");
   audit(req, to === "void" ? "void" : "update", "charge", charge.id, charge.patient_id, `status ${charge.status} -> ${to}`);
@@ -606,6 +816,7 @@ router.get("/patients/:id/superbill", read, (req, res) => {
      ORDER BY c.date_of_service, c.id`).all(patient.id, from, to);
   const payments = db.prepare("SELECT * FROM payments WHERE patient_id = ? AND received_on BETWEEN ? AND ? ORDER BY received_on, id").all(patient.id, from, to);
   const policies = insurance(db, patient.id);
+  const ahcccs = isAhcccs(db, patient.id);
   const dxDesc = new Map(db.prepare("SELECT icd10_code, description FROM diagnoses WHERE patient_id = ?").all(patient.id).map((d) => [d.icd10_code.toUpperCase(), d.description]));
   const allDx = [...new Set(services.flatMap((s) => String(s.diagnosis_codes || "").split(",").map((x) => x.trim()).filter(Boolean)))];
   const totalCharges = services.reduce((a, s) => a + s.fee_cents, 0);
@@ -645,7 +856,8 @@ router.get("/patients/:id/superbill", read, (req, res) => {
             <h3>Patient</h3>
             <p class="small">
               <strong>${patient.first_name} ${patient.last_name}</strong><br>
-              DOB ${fmtDate(patient.dob)} · MRN ${patient.mrn}<br>
+              DOB ${fmtDate(patient.dob)} · MRN ${patient.mrn}${patient.gender ? ` · Gender ${patient.gender}` : ""}<br>
+              ${patient.ahcccs_id ? html`AHCCCS ID ${patient.ahcccs_id}<br>` : ""}
               ${addr ? html`${addr}<br>` : ""}${cityLine ? html`${cityLine}<br>` : ""}
               ${patient.phone ? html`Phone ${patient.phone}` : ""}
             </p>
@@ -667,18 +879,22 @@ router.get("/patients/:id/superbill", read, (req, res) => {
           <h3>Services</h3>
           ${services.length ? html`
             <div class="table-wrap"><table class="table">
-              <thead><tr><th>DOS</th><th>CPT</th><th>Description</th><th>ICD-10</th><th class="num">Units</th><th class="num">Fee</th><th>Rendering provider</th></tr></thead>
+              <thead><tr><th>DOS</th><th>POS</th><th>Code</th><th>Modifiers</th><th>Description</th><th>ICD-10</th><th class="num">Minutes</th><th class="num">Units</th><th class="num">Fee</th><th>Rendering provider</th></tr></thead>
               <tbody>${services.map((s) => html`
                 <tr>
                   <td>${s.date_of_service}</td>
-                  <td>${s.cpt_code}${s.modifier ? `-${s.modifier}` : ""}</td>
+                  <td>${s.pos || ""}</td>
+                  <td>${s.cpt_code}</td>
+                  <td>${parseModifiers(s.modifier).join(" ")}</td>
                   <td>${s.description || ""}</td>
                   <td>${String(s.diagnosis_codes || "").split(",").join(", ")}</td>
+                  <td class="num">${s.minutes != null ? s.minutes : ""}</td>
                   <td class="num">${s.units}</td>
                   <td class="num">${money(s.fee_cents)}</td>
-                  <td>${providerName(s)}${s.provider_npi ? html`<br><span class="small">NPI ${s.provider_npi}</span>` : ""}</td>
+                  <td>${providerName(s)}${s.provider_npi ? html`<br><span class="small">NPI ${s.provider_npi}</span>` : ""}
+                    ${ahcccs && isNonIndependent(s.provider_credentials) ? html`<br><span class="small"><strong>${FACILITY_NOTE}.</strong></span>` : ""}</td>
                 </tr>`)}</tbody>
-              <tfoot><tr><td colspan="5">Total charges</td><td class="num">${money(totalCharges)}</td><td></td></tr></tfoot>
+              <tfoot><tr><td colspan="8">Total charges</td><td class="num">${money(totalCharges)}</td><td></td></tr></tfoot>
             </table></div>` : html`<p class="muted">No services in this period.</p>`}
         </section>
         <section>
@@ -691,10 +907,14 @@ router.get("/patients/:id/superbill", read, (req, res) => {
             </table></div>` : html`<p class="muted small">No payments received in this period.</p>`}
           <p><strong>Balance for period: ${money(totalCharges - totalPaid)}</strong></p>
         </section>
+        ${ahcccs ? html`<p class="small">AHCCCS: POS is the member's location. Services by associate-level, BHT or BHPP staff are billed under the facility NPI with the rendering individual named in Box 19 (loop 2300 NTE); no incident-to billing.</p>` : ""}
         <p class="small muted">Provided for the patient to submit to their insurance for possible reimbursement. Payment status with the payer is not guaranteed.</p>
         <p class="small" style="margin-top:2rem">Provider signature: ____________________________ Date: ____________</p>
       </article>`,
   }));
 });
 
-module.exports = { router };
+module.exports = {
+  router, TIMED_15, POS_OPTIONS, suggestModifiers, checkChargeRules, ahcccsBillErrors, parseModifiers, isNonIndependent,
+  telehealthModality, noteServiceType, minutesFor,
+};
