@@ -509,7 +509,7 @@ router.get("/appointments/:id", requirePerm("schedule:read"), (req, res) => {
   audit(req, "view", "appointment", a.id, a.patient_id);
   const u = req.user;
   const notes = can(u, "clinical:read")
-    ? req.db.prepare("SELECT id, type, status, service_date FROM notes WHERE appointment_id = ? ORDER BY id").all(a.id) : [];
+    ? req.db.prepare("SELECT id, type, status, service_date FROM notes WHERE appointment_id = ? AND (type <> 'psychotherapy' OR author_id = ?) ORDER BY id").all(a.id, req.user.id) : [];
   const editable = EDITABLE_STATUSES.includes(a.status);
 
   res.send(page(req, {
@@ -541,7 +541,7 @@ router.get("/appointments/:id", requirePerm("schedule:read"), (req, res) => {
           ${a.notes ? html`<h3 style="margin-top:1rem">Scheduling notes</h3><p class="prewrap">${a.notes}</p>` : ""}
           ${notes.length ? html`
             <h3 style="margin-top:1rem">Notes for this visit</h3>
-            <ul class="list">${notes.map((n) => html`<li><a href="/ehr/patients/${a.patient_id}/notes/${n.id}">${humanize(n.type)} note</a> ${badge(n.status)}</li>`)}</ul>` : ""}
+            <ul class="list">${notes.map((n) => html`<li><a href="/ehr/notes/${n.id}">${humanize(n.type)} note</a> ${badge(n.status)}</li>`)}</ul>` : ""}
         </section>
         <div>
           ${statusForm(req, a)}
