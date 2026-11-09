@@ -1,7 +1,7 @@
 "use strict";
 const express = require("express");
 const { can } = require("../permissions");
-const { html, page, badge, fmtTime, today, patientName, humanize } = require("../views");
+const { html, page, badge, fmtTime, today, addDays, patientName, humanize } = require("../views");
 
 const router = express.Router();
 
@@ -23,8 +23,8 @@ router.get("/", (req, res) => {
     ? db.prepare("SELECT COUNT(*) AS n FROM charges WHERE status = 'unbilled'").get().n : null;
   const flags = can(u, "clinical:read") ? db.prepare(
     `SELECT a.*, p.first_name, p.last_name, p.preferred_name FROM assessments a JOIN patients p ON p.id = a.patient_id
-     WHERE a.flagged = 1 AND a.administered_on >= date('now','-14 days')
-     ${mineOnly ? "AND p.primary_clinician_id = ?" : ""} ORDER BY a.administered_on DESC LIMIT 10`).all(...(mineOnly ? [u.id] : [])) : [];
+     WHERE a.flagged = 1 AND a.administered_on >= ?
+     ${mineOnly ? "AND p.primary_clinician_id = ?" : ""} ORDER BY a.administered_on DESC LIMIT 10`).all(addDays(t, -14), ...(mineOnly ? [u.id] : [])) : [];
 
   const tile = (label, value, href) => value === null ? "" : html`
     <a class="tile" href="${href}"><span class="tile__num">${value}</span><span class="tile__label">${label}</span></a>`;

@@ -97,7 +97,7 @@ const BADGE_TONE = {
   active: "good", signed: "good", completed: "good", paid: "good", met: "good", checked_in: "info", scheduled: "info",
   draft: "warn", new: "warn", unbilled: "warn", in_progress: "info", contacted: "info", billed: "info",
   no_show: "bad", cancelled: "muted", late_cancel: "bad", denied: "bad", void: "muted", inactive: "muted",
-  discharged: "muted", closed: "muted", resolved: "muted", high: "bad", moderate: "warn", low: "info", none: "muted",
+  discharged: "muted", closed: "muted", resolved: "muted", superseded: "muted", not_started: "muted", revised: "info", discontinued: "muted", high: "bad", moderate: "warn", low: "info", none: "muted",
 };
 function badge(status, label) {
   return html`<span class="badge badge--${BADGE_TONE[status] || "muted"}">${label || humanize(status)}</span>`;
@@ -201,7 +201,7 @@ function chartPage(req, patient, tab, body, { title } = {}) {
   const clinician = patient.primary_clinician_id
     ? req.db.prepare("SELECT name, credentials FROM users WHERE id = ?").get(patient.primary_clinician_id) : null;
   const flagged = can(req.user, "clinical:read") && req.db.prepare(
-    `SELECT 1 FROM assessments WHERE patient_id = ? AND flagged = 1 AND administered_on >= date('now','-30 days') LIMIT 1`).get(patient.id);
+    `SELECT 1 FROM assessments WHERE patient_id = ? AND flagged = 1 AND administered_on >= ? LIMIT 1`).get(patient.id, addDays(today(), -30));
   const base = `/ehr/patients/${patient.id}`;
   const header = html`
     <section class="chart-head" aria-label="Patient summary">

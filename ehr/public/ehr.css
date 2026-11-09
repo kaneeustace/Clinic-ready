@@ -157,7 +157,8 @@ legend { font-weight: 700; padding: 0 .35rem; }
 
 /* Print (superbills, notes) */
 @media print {
-  .sidebar, .topbar, .tabs, .form-actions, .no-print, .btn { display: none !important; }
+  .sidebar, .topbar, .tabs, .form-actions, .no-print, .btn, form { display: none !important; }
+  .chart-head { border: 0; padding: 0 0 1rem; }
   .app { display: block; } .content { padding: 0; } .card { box-shadow: none; border: 0; }
   body { background: #fff; }
 }
