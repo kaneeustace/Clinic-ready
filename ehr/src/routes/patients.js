@@ -750,7 +750,7 @@ function renderOverview(req, res, patient, state = null, status = 200) {
       <div class="card__head"><h2 id="notes-h">Recent signed notes</h2><a class="btn btn--sm" href="/ehr/patients/${pid}/notes">All notes</a></div>
       ${notes.length ? html`
         <ul class="list-plain">${notes.map((n) => html`
-          <li><strong>${humanize(n.type)} note</strong> · ${fmtDate(n.service_date || n.signed_at)} <span class="muted small">by ${n.author_name}</span></li>`)}</ul>`
+          <li><a href="/ehr/notes/${n.id}"><strong>${humanize(n.type)} note</strong></a> · ${fmtDate(n.service_date || n.signed_at)} <span class="muted small">by ${n.author_name}</span></li>`)}</ul>`
         : html`<p class="muted">No signed notes yet.</p>`}
     </section>` : "";
 

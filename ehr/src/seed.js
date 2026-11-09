@@ -105,7 +105,7 @@ function seed(db, { password = DEMO_PASSWORD } = {}) {
     const insReq = db.prepare(`INSERT INTO appointment_requests (first_name, last_name, phone, email, contact_method, ok_voicemail,
       care_for, service, visit_preference, insurance, reason, referral_source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
     insReq.run("Skyler", "Example", "(555) 010-2001", "skyler@example.com", "phone", "yes", "myself", "individual_therapy", "telehealth", "Sample Health Plan", "Looking for help with anxiety.", "search");
-    insReq.run("Reese", "Sample", "(555) 010-2002", "reese@example.com", "email", "no", "my_child", "teen", "in_person", "", "", "referral");
+    insReq.run("Reese", "Sample", "(555) 010-2002", "reese@example.com", "email", "no", "my_child", "teen_young_adult", "in_person", "", "", "doctor");
 
     // Module seeds
     const dir = path.join(__dirname, "seeds");

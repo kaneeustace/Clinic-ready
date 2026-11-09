@@ -1,7 +1,7 @@
 "use strict";
 const express = require("express");
 const { can } = require("../permissions");
-const { html, page, badge, fmtTime, today, addDays, patientName, humanize } = require("../views");
+const { html, page, badge, fmtTime, today, addDays, nowLocal, patientName, humanize } = require("../views");
 
 const router = express.Router();
 
@@ -33,7 +33,7 @@ router.get("/", (req, res) => {
     title: "Dashboard",
     active: "dashboard",
     body: html`
-      <div class="page-head"><h1>Good ${new Date().getHours() < 12 ? "morning" : "day"}, ${u.name.split(" ")[0]}</h1></div>
+      <div class="page-head"><h1>Good ${Number(nowLocal().slice(11, 13)) < 12 ? "morning" : Number(nowLocal().slice(11, 13)) < 17 ? "afternoon" : "evening"}, ${u.name.split(" ")[0]}</h1></div>
       <div class="tiles">
         ${tile(mineOnly ? "My appointments today" : "Appointments today", appts.length, "/ehr/schedule")}
         ${tile("My unsigned notes", drafts, "/ehr/notes")}
