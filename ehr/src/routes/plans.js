@@ -671,7 +671,10 @@ function renderPlanTab(req, patient, opts = {}) {
     ${isActive && draft ? html`<div class="alert alert--warn" role="status"><strong>Unsigned draft revision in progress.</strong> Version ${draft.version} isn't in effect until it's signed and activated. <a href="${planUrl(draft)}">Open draft</a></div>` : ""}
     ${isDraft ? html`<div class="alert alert--warn" role="status"><strong>Draft, not in effect.</strong>
       ${check.errors.length ? html` Before activation: ${check.errors.join(" ")}` : " Ready to activate."}
-      ${locked ? html`<br>Signatures have been collected, so the content is locked. To edit, clear the signatures on the <a href="${pAct}/sign">signing page</a>.` : ""}</div>` : ""}
+      ${locked ? html`<br>Signatures have been collected, so the content is locked.
+        ${writable ? html`<form method="post" action="${pAct}/signatures/clear" class="inline-form" data-confirm="Clear all signatures on this draft so it can be edited? They'll need to sign again.">
+          ${csrfField(req)}<input type="hidden" name="return" value="plan">
+          <button class="btn btn--sm" type="submit">Clear signatures &amp; edit</button></form>` : ""}` : ""}</div>` : ""}
     ${alerts.map((a) => html`<div class="alert alert--${a.tone}" role="${a.tone === "error" ? "alert" : "status"}"><strong>${a.strong}</strong> ${a.text}</div>`)}
     ${sud ? html`<div class="alert alert--info part2" role="note">${PART2_NOTICE}</div>` : ""}
 
@@ -1510,6 +1513,10 @@ router.post("/treatment-plans/:planId/signatures", WRITE, (req, res) => {
   if (plan.status !== "draft") return conflict(req, res, patient, "Signatures can only be added to a draft plan.", plan.id);
   const role = str(req.body.role, 20);
   const errors = [];
+  // Signing locks the content, so the plan must be written before anyone signs it.
+  if (!activationCheck(db, plan, patient).chain) {
+    errors.push("Finish the plan before collecting signatures: add at least one complete problem → goal → objective → intervention chain. Signing locks the plan's content.");
+  }
   if (!SIG_ROLES.includes(role)) errors.push("Choose a valid signature role.");
   else if (db.prepare("SELECT 1 FROM plan_signatures WHERE plan_id = ? AND role = ?").get(plan.id, role)) errors.push(`A ${role} signature is already on this version.`);
   const row = { role, signer_user_id: null, signer_name: "", method: null, declined: 0, declined_reason: null, copy_offered: 0 };
@@ -1555,7 +1562,7 @@ router.post("/treatment-plans/:planId/signatures/clear", WRITE, (req, res) => {
   const n = req.db.prepare("DELETE FROM plan_signatures WHERE plan_id = ?").run(plan.id).changes;
   audit(req, "update", "treatment_plan", plan.id, patient.id, `${n} signature(s) cleared; draft unlocked`);
   req.flash("success", "Signatures cleared. The draft can be edited again.");
-  res.redirect(`/ehr/treatment-plans/${plan.id}/sign`);
+  res.redirect(req.body.return === "plan" ? planUrl(plan) : `/ehr/treatment-plans/${plan.id}/sign`);
 });
 
 router.post("/treatment-plans/:planId/activate", WRITE, (req, res) => {

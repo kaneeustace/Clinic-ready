@@ -685,3 +685,26 @@ test("unknown patient / plan / item -> 404", async () => {
   assert.equal((await c.get(`/ehr/treatment-plans/${draft.id}/objectives/999999/edit`)).status, 404);
   assert.equal((await c.get(`/ehr/treatment-plans/${draft.id}/goals/new?parent=999999`)).status, 404);
 });
+
+test("signatures can't be collected on an empty draft; a locked draft can be unlocked from the plan page", async () => {
+  const c = await t.login("therapist");
+  const pid = newPatient({ name: "Locktest" });
+  addDx(pid, "F41.1", "Generalized anxiety disorder", 1);
+  const id = await createDraft(c, pid);
+  // Empty draft: signing is refused and nothing is recorded
+  const r = await c.post(`/ehr/treatment-plans/${id}/signatures`, { role: "clinician", password: PW });
+  assert.equal(r.status, 400);
+  assert.match(r.text, /Finish the plan before collecting signatures/);
+  assert.equal(t.db.prepare("SELECT COUNT(*) AS n FROM plan_signatures WHERE plan_id = ?").get(id).n, 0);
+  // Simulate a draft that was signed before it was finished (legacy data)
+  t.db.prepare("INSERT INTO plan_signatures (plan_id, role, signer_user_id, signer_name, method) VALUES (?, 'clinician', ?, 'X', 'password')").run(id, c.userId);
+  const page = await c.get(`/ehr/patients/${pid}/treatment-plan`);
+  assert.match(page.text, /Clear signatures &amp; edit/);
+  const clear = await c.post(`/ehr/treatment-plans/${id}/signatures/clear`, { return: "plan" });
+  assert.equal(clear.status, 302);
+  assert.match(clear.location, /treatment-plan\?plan=/);
+  assert.equal(t.db.prepare("SELECT COUNT(*) AS n FROM plan_signatures WHERE plan_id = ?").get(id).n, 0);
+  // Editable again, and signing works once the chain exists
+  await addChain(c, id);
+  assert.equal((await c.post(`/ehr/treatment-plans/${id}/signatures`, { role: "clinician", password: PW })).status, 302);
+});
