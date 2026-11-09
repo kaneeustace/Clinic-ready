@@ -289,6 +289,26 @@ const OBJ_PROGRESS = [
 ];
 const MAX_OBJ_COMMENT = 500;
 const NO_PLAN_MSG = "No active treatment plan. Payers expect a plan before ongoing therapy.";
+/** Ongoing-therapy notes can't be written until the patient has an active (signed) treatment plan. */
+const PLAN_REQUIRED_TYPES = ["progress", "group"];
+const PLAN_REQUIRED_MSG = "A signed, active treatment plan is required before progress or group notes can be written for this patient.";
+const planRequiredFor = (db, type, patientId) => PLAN_REQUIRED_TYPES.includes(type) && !activePlan(db, patientId).hasPlan;
+
+function planRequiredPage(req, res, patient, type) {
+  audit(req, "blocked", "note", null, patient.id, `${type} note: no active treatment plan`);
+  return res.status(409).send(chartPage(req, patient, "notes", html`
+    <section class="card card--alert" role="alert">
+      <h2>Treatment plan required</h2>
+      <p>${PLAN_REQUIRED_MSG}</p>
+      <p class="muted">Document the intake assessment, then create the treatment plan with the client and sign it.
+        Intake, crisis safety plan, contact, ASAM, psychiatry and release-of-information notes can still be written.</p>
+      <div class="row">
+        ${can(req.user, "clinical:write") ? html`<a class="btn btn--primary" href="/ehr/patients/${patient.id}/treatment-plan">Go to treatment plan</a>
+        <a class="btn" href="/ehr/patients/${patient.id}/notes/new?type=intake">Write intake assessment</a>` : ""}
+        <a class="btn btn--ghost" href="/ehr/patients/${patient.id}/notes">Back to notes</a>
+      </div>
+    </section>`, { title: "Treatment plan required" }));
+}
 const OBJ_SIGN_MSG = "Select at least one treatment plan objective addressed in this session.";
 
 /** The patient's active plan(s) and their objectives, ordered problem > goal > objective. */
@@ -788,7 +808,8 @@ router.get("/patients/:id/notes", requirePerm("clinical:read"), (req, res) => {
     <div class="page-head"><h2>Notes</h2></div>
     ${writer ? html`<section class="card no-print" aria-labelledby="new-h">
       <h3 id="new-h">New note</h3>
-      <div class="row">${TYPE_KEYS.map((k) => html`<a class="btn btn--sm" href="/ehr/patients/${patient.id}/notes/new?type=${k}">${TYPES[k].label}</a>`)}</div>
+      ${!activePlan(req.db, patient.id).hasPlan ? html`<p class="alert alert--warn">${PLAN_REQUIRED_MSG} <a href="/ehr/patients/${patient.id}/treatment-plan">Go to treatment plan</a></p>` : ""}
+      <div class="row">${TYPE_KEYS.filter((k) => !planRequiredFor(req.db, k, patient.id)).map((k) => html`<a class="btn btn--sm" href="/ehr/patients/${patient.id}/notes/new?type=${k}">${TYPES[k].label}</a>`)}</div>
     </section>` : ""}
     <section class="card">
       ${notes.length ? html`<div class="table-wrap"><table class="table">
@@ -816,6 +837,7 @@ router.get("/patients/:id/notes/new", requirePerm("clinical:write"), (req, res) 
   if (error) { req.flash("error", error); return res.redirect(`/ehr/patients/${patient.id}/notes`); }
   let type = String(req.query.type || "");
   if (!TYPES[type]) type = (appt && APPT_DEFAULT_TYPE[appt.type]) || "progress";
+  if (planRequiredFor(req.db, type, patient.id)) return planRequiredPage(req, res, patient, type);
   let format = String(req.query.format || "");
   if (!formatsFor(type).includes(format)) format = formatsFor(type)[0];
   const values = { service_date: today() };
@@ -836,6 +858,7 @@ router.post("/patients/:id/notes", requirePerm("clinical:write"), (req, res) => 
   if (!patient) return;
   const type = str(req.body.type);
   if (!TYPES[type]) return res.status(400).send(page(req, { title: "Invalid note", body: html`<div class="card"><h1>Unknown note type</h1></div>` }));
+  if (planRequiredFor(req.db, type, patient.id)) return planRequiredPage(req, res, patient, type);
   let format = str(req.body.format);
   if (!formatsFor(type).includes(format)) format = formatsFor(type)[0];
   const { appt, error } = loadAppointment(req, patient.id, str(req.body.appointment_id));
@@ -949,6 +972,7 @@ router.post("/notes/:noteId/sign", requirePerm("clinical:write"), (req, res) => 
   const { note, patient } = loaded;
   if (note.author_id !== req.user.id) return deny(req, res, "Only the note's author can sign it.");
   if (note.status !== "draft") return deny(req, res, "This note is already signed.");
+  if (planRequiredFor(req.db, note.type, patient.id)) return renderNote(req, res, loaded, { signErrs: { plan: PLAN_REQUIRED_MSG }, status: 409 });
   let thread = {};
   if (PLAN_LINKED_TYPES.includes(note.type)) {
     const ids = activePlan(req.db, patient.id).objectives.map((o) => o.id);
@@ -1006,4 +1030,4 @@ router.post("/notes/:noteId/delete", requirePerm("clinical:write"), (req, res) =
   res.redirect(`/ehr/patients/${patient.id}/notes`);
 });
 
-module.exports = { router, TYPES, activePlan, signErrors };
+module.exports = { router, TYPES, PLAN_REQUIRED_TYPES, activePlan, signErrors };

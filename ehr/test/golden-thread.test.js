@@ -110,19 +110,39 @@ test("signing requires an addressed objective when the patient has an active pla
   assert.equal(t.db.prepare("SELECT status FROM notes WHERE id = ?").get(id).status, "signed");
 });
 
-test("without an active plan: warning shown, signing allowed", async () => {
+test("without an active plan: progress and group notes are blocked, intake is allowed", async () => {
   const c = await t.login("therapist");
   const noPlanPid = t.ctx.patients[4];
   t.db.prepare("UPDATE treatment_plans SET status = 'completed' WHERE patient_id = ? AND status = 'active'").run(noPlanPid);
-  const f = await c.get(`/ehr/patients/${noPlanPid}/notes/new?type=progress`);
-  assert.match(f.text, /No active treatment plan\. Payers expect a plan before ongoing therapy\./);
-  assert.match(f.text, new RegExp(`href="/ehr/patients/${noPlanPid}/treatment-plan"`));
-  assert.doesNotMatch(f.text, /_addressed"/);
+  for (const type of ["progress", "group"]) {
+    const f = await c.get(`/ehr/patients/${noPlanPid}/notes/new?type=${type}`);
+    assert.equal(f.status, 409, type);
+    assert.match(f.text, /Treatment plan required/);
+    assert.match(f.text, new RegExp(`href="/ehr/patients/${noPlanPid}/treatment-plan"`));
+  }
+  const before = t.db.prepare("SELECT COUNT(*) AS n FROM notes WHERE patient_id = ?").get(noPlanPid).n;
   const r = await c.post(`/ehr/patients/${noPlanPid}/notes`, dap());
+  assert.equal(r.status, 409);
+  assert.equal(t.db.prepare("SELECT COUNT(*) AS n FROM notes WHERE patient_id = ?").get(noPlanPid).n, before, "no note created");
+  assert.ok(t.db.prepare("SELECT 1 FROM audit_log WHERE action = 'blocked' AND patient_id = ?").get(noPlanPid));
+  // Notes tab hides the progress/group buttons and explains why.
+  const tab = await c.get(`/ehr/patients/${noPlanPid}/notes`);
+  assert.match(tab.text, /A signed, active treatment plan is required/);
+  assert.doesNotMatch(tab.text, /notes\/new\?type=progress"/);
+  // Intake is still allowed (the plan is built from it).
+  assert.equal((await c.get(`/ehr/patients/${noPlanPid}/notes/new?type=intake`)).status, 200);
+});
+
+test("a draft progress note can't be signed if the plan ended after it was started", async () => {
+  const c = await t.login("therapist");
+  const r = await c.post(`/ehr/patients/${pid}/notes`, dap({ [`obj_${objA}_addressed`]: "1" }));
   assert.equal(r.status, 302);
   const id = noteIdFrom(r);
-  assert.match((await c.get(`/ehr/notes/${id}`)).text, /No active treatment plan/);
-  assert.equal((await c.post(`/ehr/notes/${id}/sign`, { password: PW })).status, 302);
+  t.db.prepare("UPDATE treatment_plans SET status = 'completed' WHERE patient_id = ? AND status = 'active'").run(pid);
+  const s = await c.post(`/ehr/notes/${id}/sign`, { password: PW });
+  assert.equal(s.status, 409);
+  assert.equal(t.db.prepare("SELECT status FROM notes WHERE id = ?").get(id).status, "draft");
+  t.db.prepare("UPDATE treatment_plans SET status = 'active' WHERE patient_id = ? AND status = 'completed'").run(pid);
 });
 
 test("edit replaces the set of addressed objectives", async () => {

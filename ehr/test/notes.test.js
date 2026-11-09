@@ -12,6 +12,8 @@ before(async () => {
   // Keep these note-flow tests independent of seeded treatment plans (the golden-thread sign rule
   // is covered in golden-thread.test.js).
   t.db.prepare("UPDATE treatment_plans SET status = 'completed' WHERE patient_id = ? AND status = 'active'").run(pid);
+  // Progress/group notes require an active plan; give this patient a minimal active plan (no objectives).
+  t.db.prepare("INSERT INTO treatment_plans (patient_id, author_id, status, start_date, review_date, activated_at) VALUES (?, ?, 'active', date('now'), date('now', '+90 days'), datetime('now'))").run(pid, t.ctx.users.therapist);
 });
 after(async () => { await t.stop(); });
 
