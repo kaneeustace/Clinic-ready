@@ -115,14 +115,18 @@ function patientName(p) {
 
 /* ---------------- layout ---------------- */
 const NAV = [
-  { key: "dashboard", href: "/ehr", label: "Dashboard", perm: null, icon: "M3 12l9-8 9 8M5 10v10h14V10" },
-  { key: "patients", href: "/ehr/patients", label: "Patients", perm: "patients:read", icon: "M16 11a4 4 0 1 0-8 0M4 21c0-4 4-6 8-6s8 2 8 6" },
-  { key: "schedule", href: "/ehr/schedule", label: "Schedule", perm: "schedule:read", icon: "M4 6h16v14H4zM4 10h16M9 3v4M15 3v4" },
-  { key: "notes", href: "/ehr/notes", label: "My notes", perm: "clinical:write", icon: "M6 3h9l4 4v14H6zM9 12h7M9 16h7" },
-  { key: "requests", href: "/ehr/requests", label: "Requests", perm: "requests:manage", icon: "M4 6h16v12H4zM4 7l8 6 8-6" },
-  { key: "billing", href: "/ehr/billing", label: "Billing", perm: "billing:read", icon: "M3 7h18v10H3zM3 11h18" },
-  { key: "admin", href: "/ehr/admin", label: "Admin", perm: "admin", icon: "M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z" },
+  { group: "Workspace", key: "dashboard", href: "/ehr", label: "Dashboard", perm: null, icon: "M4 13h6V4H4zM14 20h6v-9h-6zM4 20h6v-3H4zM14 7h6V4h-6z" },
+  { group: "Workspace", key: "patients", href: "/ehr/patients", label: "Patients", perm: "patients:read", icon: "M16 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0M4 21c0-4 3.6-6 8-6s8 2 8 6" },
+  { group: "Workspace", key: "schedule", href: "/ehr/schedule", label: "Schedule", perm: "schedule:read", icon: "M4 6h16v14H4zM4 10h16M9 3v4M15 3v4" },
+  { group: "Workspace", key: "notes", href: "/ehr/notes", label: "My notes", perm: "clinical:write", icon: "M6 3h9l4 4v14H6zM9 12h7M9 16h5" },
+  { group: "Operations", key: "requests", href: "/ehr/requests", label: "Intake requests", perm: "requests:manage", icon: "M4 6h16v12H4zM4 7l8 6 8-6" },
+  { group: "Operations", key: "billing", href: "/ehr/billing", label: "Billing", perm: "billing:read", icon: "M3 6h18v12H3zM3 10h18M7 15h4" },
+  { group: "Operations", key: "admin", href: "/ehr/admin", label: "Administration", perm: "admin", icon: "M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z" },
 ];
+
+function initials(name) {
+  return String(name || "?").replace(/[(),]/g, " ").split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join("");
+}
 
 function icon(d) {
   return raw(`<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${d}"/></svg>`);
@@ -140,21 +144,33 @@ function page(req, { title, active = "", body, bare = false }) {
     : html`
       <div class="app">
         <aside class="sidebar" aria-label="EHR navigation">
-          <a class="sidebar__brand" href="/ehr"><span class="logo-dot" aria-hidden="true"></span> Clinic Ready <strong>EHR</strong></a>
-          <nav><ul>
-            ${NAV.filter((n) => !n.perm || can(user, n.perm)).map((n) => html`
-              <li><a href="${n.href}" ${n.key === active ? raw('aria-current="page"') : ""}>${icon(n.icon)}<span>${n.label}</span></a></li>`)}
-          </ul></nav>
-          <form class="sidebar__search" method="get" action="/ehr/patients" role="search">
-            <label class="visually-hidden" for="global-q">Search patients</label>
-            <input id="global-q" type="search" name="q" placeholder="Search patients…">
-          </form>
+          <a class="sidebar__brand" href="/ehr"><span class="logo-dot" aria-hidden="true"></span><span>Clinic Ready<small>Behavioral Health EHR</small></span></a>
+          <nav>
+            ${["Workspace", "Operations"].map((g) => {
+              const items = NAV.filter((n) => n.group === g && (!n.perm || can(user, n.perm)));
+              return items.length ? html`
+                <p class="sidebar__label">${g}</p>
+                <ul>${items.map((n) => html`
+                  <li><a href="${n.href}" ${n.key === active ? raw('aria-current="page"') : ""}>${icon(n.icon)}<span>${n.label}</span></a></li>`)}
+                </ul>` : "";
+            })}
+          </nav>
+          <div class="sidebar__foot">
+            <a href="/ehr/account" class="sidebar__user" ${active === "account" ? raw('aria-current="page"') : ""}>
+              <span class="avatar avatar--sm" aria-hidden="true">${initials(user.name)}</span>
+              <span><strong>${user.name}</strong><small>${user.credentials ? `${user.credentials} · ` : ""}${humanize(user.role)}</small></span>
+            </a>
+          </div>
         </aside>
         <div class="app__main">
           <header class="topbar">
-            ${SHOW_DEMO_BANNER ? html`<div class="topbar__demo">Demo environment. Use synthetic data only.</div>` : html`<span></span>`}
-            <div class="topbar__user">
-              <span>${user.name}${user.credentials ? `, ${user.credentials}` : ""} · <span class="muted">${humanize(user.role)}</span></span>
+            <form class="topbar__search" method="get" action="/ehr/patients" role="search">
+              <label class="visually-hidden" for="global-q">Search patients</label>
+              ${icon("M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM21 21l-4.3-4.3")}
+              <input id="global-q" type="search" name="q" placeholder="Search patients…">
+            </form>
+            <div class="topbar__right">
+              ${SHOW_DEMO_BANNER ? html`<span class="topbar__demo" title="Use synthetic data only">Demo</span>` : ""}
               <a class="btn btn--ghost btn--sm" href="/ehr/account">Account</a>
               <form method="post" action="/ehr/logout">${csrfField(req)}<button class="btn btn--ghost btn--sm" type="submit">Sign out</button></form>
             </div>
@@ -173,7 +189,10 @@ function page(req, { title, active = "", body, bare = false }) {
   <meta name="robots" content="noindex, nofollow">
   <title>${title ? `${title} · ` : ""}Clinic Ready EHR</title>
   <link rel="icon" href="/assets/img/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/ehr/static/ehr.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/ehr/static/ehr.css?v=3">
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
@@ -207,21 +226,29 @@ function chartPage(req, patient, tab, body, { title } = {}) {
   const base = `/ehr/patients/${patient.id}`;
   const header = html`
     <section class="chart-head" aria-label="Patient summary">
-      <div>
-        <h1 class="chart-head__name">${patientName(patient)}</h1>
-        <p class="chart-head__meta">
-          <span>MRN ${patient.mrn}</span>
-          <span>DOB ${fmtDate(patient.dob)} (${age(patient.dob)} y)</span>
-          ${patient.pronouns ? html`<span>${patient.pronouns}</span>` : ""}
-          ${clinician ? html`<span>Clinician: ${clinician.name}${clinician.credentials ? `, ${clinician.credentials}` : ""}</span>` : ""}
+      <span class="avatar avatar--lg" aria-hidden="true">${initials(`${patient.first_name} ${patient.last_name}`)}</span>
+      <div class="chart-head__main">
+        <div class="chart-head__title">
+          <h1 class="chart-head__name">${patientName(patient)}</h1>
           ${badge(patient.status)}
-        </p>
+        </div>
+        <dl class="chart-head__meta">
+          <div><dt>MRN</dt><dd>${patient.mrn}</dd></div>
+          <div><dt>DOB</dt><dd>${fmtDate(patient.dob)} · ${age(patient.dob)} y</dd></div>
+          ${patient.pronouns ? html`<div><dt>Pronouns</dt><dd>${patient.pronouns}</dd></div>` : ""}
+          <div><dt>Clinician</dt><dd>${clinician ? `${clinician.name}${clinician.credentials ? `, ${clinician.credentials}` : ""}` : "Unassigned"}</dd></div>
+          ${patient.phone ? html`<div><dt>Phone</dt><dd>${patient.phone}</dd></div>` : ""}
+        </dl>
+        <div class="chart-head__alerts">
+          ${allergies.length
+            ? html`<span class="pill pill--bad">Allergies: ${allergies.map((a) => a.substance).join(", ")}</span>`
+            : html`<span class="pill">NKA (no known allergies)</span>`}
+          ${flagged ? html`<span class="pill pill--bad">Safety flag: PHQ-9 item 9 endorsed in last 30 days</span>` : ""}
+        </div>
       </div>
-      <div class="chart-head__alerts">
-        ${allergies.length
-          ? html`<span class="pill pill--bad" title="Allergies">Allergies: ${allergies.map((a) => a.substance).join(", ")}</span>`
-          : html`<span class="pill">No known allergies</span>`}
-        ${flagged ? html`<span class="pill pill--bad">Safety flag: recent PHQ-9 item 9 &gt; 0</span>` : ""}
+      <div class="chart-head__actions">
+        ${can(req.user, "schedule:write") ? html`<a class="btn btn--sm" href="/ehr/schedule/new?patient_id=${patient.id}">Schedule</a>` : ""}
+        ${can(req.user, "clinical:write") ? html`<a class="btn btn--primary btn--sm" href="${base}/notes/new">New note</a>` : ""}
       </div>
     </section>
     <nav class="tabs" aria-label="Chart sections">
@@ -245,6 +272,6 @@ function select(name, options, selected, attrs = "") {
 }
 
 module.exports = {
-  html, raw, esc, SafeHtml, page, chartPage, notFound, csrfField, select, badge, icon, getPatient, patientName,
+  initials, html, raw, esc, SafeHtml, page, chartPage, notFound, csrfField, select, badge, icon, getPatient, patientName,
   today, nowLocal, addDays, fmtDate, fmtTime, fmtDateTime, fmtTimestamp, age, money, parseMoney, humanize, TZ,
 };
