@@ -1,5 +1,508 @@
 "use strict";
-// STUB: to be implemented by its module owner.
+/*
+ * Administration, security and account settings.
+ *   /admin...          user management, audit log viewer + CSV export, patient access report (admin only)
+ *   /account...        own profile and password change (any logged-in user)
+ */
 const express = require("express");
+const { requirePerm, hashPassword, verifyPassword, passwordPolicyError, ROLES } = require("../auth");
+const { audit } = require("../audit");
+const { html, page, csrfField, select, badge, humanize, fmtTimestamp, patientName, getPatient, notFound } = require("../views");
+
 const router = express.Router();
-module.exports = { router };
+const adminOnly = requirePerm("admin");
+const IDLE_MINUTES = Number(process.env.EHR_IDLE_MINUTES || 30);
+const PAGE_SIZE = 100;
+
+/* ------------------------------------------------------------------ */
+/* Helpers                                                            */
+/* ------------------------------------------------------------------ */
+const str = (v) => (typeof v === "string" ? v.trim() : "");
+const isYmd = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(new Date(s + "T00:00:00Z"));
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function errorList(errors) {
+  return errors.length
+    ? html`<div class="alert alert--error" role="alert"><ul class="list-plain">${errors.map((e) => html`<li>${e}</li>`)}</ul></div>`
+    : "";
+}
+
+function getUser(req, id) {
+  if (!/^\d+$/.test(String(id))) return null;
+  return req.db.prepare("SELECT * FROM users WHERE id = ?").get(Number(id)) || null;
+}
+
+function isLocked(u) {
+  return !!u.is_locked;
+}
+
+const USER_COLS = `id, email, name, credentials, role, npi, active, failed_logins, locked_until, last_login_at, created_at,
+  (locked_until IS NOT NULL AND locked_until > datetime('now')) AS is_locked`;
+
+/** Escape one CSV cell, neutralising spreadsheet formula injection. */
+function csvCell(v) {
+  let s = v === null || v === undefined ? "" : String(v);
+  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+  return `"${s.replace(/"/g, '""')}"`;
+}
+function csvRow(cells) {
+  return cells.map(csvCell).join(",") + "\r\n";
+}
+
+/* ------------------------------------------------------------------ */
+/* Overview                                                           */
+/* ------------------------------------------------------------------ */
+router.get("/admin", adminOnly, (req, res) => {
+  const db = req.db;
+  const byRole = Object.fromEntries(ROLES.map((r) => [r, { active: 0, inactive: 0 }]));
+  for (const row of db.prepare("SELECT role, active, COUNT(*) AS n FROM users GROUP BY role, active").all()) {
+    if (byRole[row.role]) byRole[row.role][row.active === 1 ? "active" : "inactive"] = row.n;
+  }
+  const sessions = db.prepare(
+    `SELECT COUNT(*) AS n FROM sessions WHERE expires_at > datetime('now') AND last_seen_at > datetime('now', ?)`
+  ).get(`-${IDLE_MINUTES} minutes`).n;
+  const events = db.prepare("SELECT COUNT(*) AS n FROM audit_log WHERE ts >= datetime('now','-1 day')").get().n;
+  const locked = db.prepare("SELECT COUNT(*) AS n FROM users WHERE locked_until > datetime('now')").get().n;
+  const failed = db.prepare("SELECT COUNT(*) AS n FROM audit_log WHERE action = 'login_failed' AND ts >= datetime('now','-1 day')").get().n;
+
+  res.send(page(req, {
+    title: "Administration",
+    active: "admin",
+    body: html`
+      <div class="page-head"><h1>Administration</h1></div>
+      <div class="tiles">
+        <a class="tile" href="/ehr/admin/users"><span class="tile__num">${Object.values(byRole).reduce((a, r) => a + r.active, 0)}</span><span class="tile__label">Active users</span></a>
+        <div class="tile"><span class="tile__num">${sessions}</span><span class="tile__label">Active sessions</span></div>
+        <a class="tile" href="/ehr/admin/audit"><span class="tile__num">${events}</span><span class="tile__label">Audit events (24h)</span></a>
+        <a class="tile" href="/ehr/admin/audit?action=login_failed"><span class="tile__num">${failed}</span><span class="tile__label">Failed sign-ins (24h)</span></a>
+        <a class="tile" href="/ehr/admin/users"><span class="tile__num">${locked}</span><span class="tile__label">Locked accounts</span></a>
+      </div>
+      <div class="grid grid--2">
+        <section class="card">
+          <div class="card__head"><h2>Users by role</h2><a class="btn btn--sm" href="/ehr/admin/users">Manage users</a></div>
+          <table class="table">
+            <thead><tr><th>Role</th><th>Active</th><th>Inactive</th></tr></thead>
+            <tbody>${ROLES.map((r) => html`<tr><td>${humanize(r)}</td><td>${byRole[r].active}</td><td>${byRole[r].inactive}</td></tr>`)}</tbody>
+          </table>
+        </section>
+        <section class="card">
+          <h2>Security</h2>
+          <ul class="list">
+            <li><a href="/ehr/admin/users">Users and access</a></li>
+            <li><a href="/ehr/admin/users/new">Add a user</a></li>
+            <li><a href="/ehr/admin/audit">Audit log</a></li>
+            <li><a href="/ehr/admin/audit.csv">Export audit log (CSV)</a></li>
+            <li><a href="/ehr/account">My account and password</a></li>
+          </ul>
+          <p class="muted small">Patient access reports are available from the audit log by filtering on a patient MRN.</p>
+        </section>
+      </div>`,
+  }));
+});
+
+/* ------------------------------------------------------------------ */
+/* Users                                                              */
+/* ------------------------------------------------------------------ */
+router.get("/admin/users", adminOnly, (req, res) => {
+  const users = req.db.prepare(`SELECT ${USER_COLS} FROM users ORDER BY active DESC, name`).all();
+  res.send(page(req, {
+    title: "Users",
+    active: "admin",
+    body: html`
+      <div class="page-head row"><h1>Users</h1><span class="spacer"></span><a class="btn btn--primary" href="/ehr/admin/users/new">Add user</a></div>
+      <section class="card table-wrap">
+        <table class="table">
+          <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Credentials</th><th>NPI</th><th>Status</th><th>Last sign-in</th><th></th></tr></thead>
+          <tbody>${users.map((u) => html`
+            <tr>
+              <td>${u.name}</td>
+              <td>${u.email}</td>
+              <td>${humanize(u.role)}</td>
+              <td>${u.credentials || ""}</td>
+              <td>${u.npi || ""}</td>
+              <td>${badge(u.active === 1 ? "active" : "inactive")} ${isLocked(u) ? badge("high", "Locked") : ""}</td>
+              <td>${u.last_login_at ? fmtTimestamp(u.last_login_at) : html`<span class="muted">Never</span>`}</td>
+              <td><a class="btn btn--sm" href="/ehr/admin/users/${u.id}/edit">Edit</a></td>
+            </tr>`)}</tbody>
+        </table>
+      </section>`,
+  }));
+});
+
+const ROLE_OPTIONS = ROLES.map((r) => ({ value: r, label: humanize(r) }));
+
+function newUserForm(req, v = {}, errors = []) {
+  return page(req, {
+    title: "Add user",
+    active: "admin",
+    body: html`
+      <div class="page-head"><h1>Add user</h1><p><a href="/ehr/admin/users">Back to users</a></p></div>
+      ${errorList(errors)}
+      <form class="card" method="post" action="/ehr/admin/users">
+        ${csrfField(req)}
+        <div class="form-grid">
+          <label>Full name <input name="name" value="${v.name || ""}" required maxlength="120"></label>
+          <label>Email <input type="email" name="email" value="${v.email || ""}" required maxlength="200" autocomplete="off"></label>
+          <label for="role">Role ${select("role", ROLE_OPTIONS, v.role || "clinician")}</label>
+          <label>Credentials <span class="hint">e.g. LCSW, MD</span><input name="credentials" value="${v.credentials || ""}" maxlength="60"></label>
+          <label>NPI <span class="hint">10 digits, optional</span><input name="npi" value="${v.npi || ""}" inputmode="numeric" pattern="\\d{10}" maxlength="10"></label>
+          <label>Initial password <span class="hint">12+ characters, 3 of: lowercase, uppercase, number, symbol</span>
+            <input type="password" name="password" required minlength="12" autocomplete="new-password"></label>
+        </div>
+        <div class="form-actions"><button class="btn btn--primary" type="submit">Create user</button><a class="btn btn--ghost" href="/ehr/admin/users">Cancel</a></div>
+      </form>`,
+  });
+}
+
+router.get("/admin/users/new", adminOnly, (req, res) => res.send(newUserForm(req)));
+
+router.post("/admin/users", adminOnly, (req, res) => {
+  const v = {
+    name: str(req.body.name), email: str(req.body.email).toLowerCase(), role: str(req.body.role),
+    credentials: str(req.body.credentials), npi: str(req.body.npi),
+  };
+  const password = typeof req.body.password === "string" ? req.body.password : "";
+  const errors = [];
+  if (!v.name) errors.push("Name is required.");
+  if (!EMAIL_RE.test(v.email)) errors.push("A valid email is required.");
+  else if (req.db.prepare("SELECT 1 FROM users WHERE email = ?").get(v.email)) errors.push("A user with that email already exists.");
+  if (!ROLES.includes(v.role)) errors.push("Choose a valid role.");
+  if (v.npi && !/^\d{10}$/.test(v.npi)) errors.push("NPI must be exactly 10 digits.");
+  const pwErr = passwordPolicyError(password);
+  if (pwErr) errors.push(pwErr);
+  if (errors.length) return res.status(400).send(newUserForm(req, v, errors));
+
+  const id = Number(req.db.prepare(
+    "INSERT INTO users (email, name, role, credentials, npi, password_hash) VALUES (?, ?, ?, ?, ?, ?)"
+  ).run(v.email, v.name, v.role, v.credentials || null, v.npi || null, hashPassword(password)).lastInsertRowid);
+  audit(req, "create", "user", id, null, `role=${v.role}`);
+  req.flash("success", `User ${v.name} created.`);
+  res.redirect("/ehr/admin/users");
+});
+
+function editUserForm(req, user, v = user, errors = []) {
+  const self = user.id === req.user.id;
+  return page(req, {
+    title: `Edit ${user.name}`,
+    active: "admin",
+    body: html`
+      <div class="page-head"><h1>${user.name}</h1><p><a href="/ehr/admin/users">Back to users</a></p></div>
+      ${errorList(errors)}
+      <div class="grid grid--2">
+        <form class="card" method="post" action="/ehr/admin/users/${user.id}/edit">
+          ${csrfField(req)}
+          <h2>Profile and access</h2>
+          <p class="muted">${user.email}${user.last_login_at ? ` · last sign-in ${fmtTimestamp(user.last_login_at)}` : ""}</p>
+          <div class="form-grid">
+            <label>Full name <input name="name" value="${v.name || ""}" required maxlength="120"></label>
+            <label for="role">Role ${select("role", ROLE_OPTIONS, v.role)}</label>
+            <label>Credentials <input name="credentials" value="${v.credentials || ""}" maxlength="60"></label>
+            <label>NPI <span class="hint">10 digits, optional</span><input name="npi" value="${v.npi || ""}" inputmode="numeric" pattern="\\d{10}" maxlength="10"></label>
+            <label for="active">Status ${select("active", [{ value: "1", label: "Active" }, { value: "0", label: "Inactive (cannot sign in)" }], String(v.active))}</label>
+          </div>
+          ${self ? html`<p class="hint">You can't deactivate your own account or remove your own admin role.</p>` : ""}
+          <div class="form-actions"><button class="btn btn--primary" type="submit">Save changes</button></div>
+        </form>
+        <div class="stack">
+          <form class="card" method="post" action="/ehr/admin/users/${user.id}/reset-password">
+            ${csrfField(req)}
+            <h2>Reset password</h2>
+            <p class="muted">Signs the user out of all sessions.</p>
+            <label>New password <span class="hint">12+ characters, 3 of: lowercase, uppercase, number, symbol</span>
+              <input type="password" name="password" required minlength="12" autocomplete="new-password"></label>
+            <div class="form-actions"><button class="btn btn--danger" type="submit">Reset password</button></div>
+          </form>
+          <section class="card">
+            <h2>Sign-in lockout</h2>
+            ${isLocked(user)
+              ? html`<p>${badge("high", "Locked")} until ${fmtTimestamp(user.locked_until)} after repeated failed sign-ins.</p>
+                <form method="post" action="/ehr/admin/users/${user.id}/unlock">${csrfField(req)}<button class="btn" type="submit">Unlock account</button></form>`
+              : html`<p class="muted">Not locked. Failed attempts since last success: ${user.failed_logins}.</p>`}
+          </section>
+        </div>
+      </div>`,
+  });
+}
+
+function loadUserWithLock(req, id) {
+  if (!/^\d+$/.test(String(id))) return null;
+  return req.db.prepare(`SELECT ${USER_COLS} FROM users WHERE id = ?`).get(Number(id)) || null;
+}
+
+router.get("/admin/users/:id/edit", adminOnly, (req, res) => {
+  const user = loadUserWithLock(req, req.params.id);
+  if (!user) return notFound(req, res, "User");
+  res.send(editUserForm(req, user));
+});
+
+router.post("/admin/users/:id/edit", adminOnly, (req, res) => {
+  const user = loadUserWithLock(req, req.params.id);
+  if (!user) return notFound(req, res, "User");
+  const v = {
+    name: str(req.body.name), role: str(req.body.role), credentials: str(req.body.credentials),
+    npi: str(req.body.npi), active: str(req.body.active) === "0" ? 0 : 1,
+  };
+  const errors = [];
+  if (!v.name) errors.push("Name is required.");
+  if (!ROLES.includes(v.role)) errors.push("Choose a valid role.");
+  if (v.npi && !/^\d{10}$/.test(v.npi)) errors.push("NPI must be exactly 10 digits.");
+  if (user.id === req.user.id) {
+    if (v.active === 0) errors.push("You can't deactivate your own account.");
+    if (v.role !== "admin") errors.push("You can't remove your own admin role.");
+  }
+  if (errors.length) return res.status(400).send(editUserForm(req, user, v, errors));
+
+  req.db.prepare("UPDATE users SET name = ?, role = ?, credentials = ?, npi = ?, active = ? WHERE id = ?")
+    .run(v.name, v.role, v.credentials || null, v.npi || null, v.active, user.id);
+  const changes = [];
+  if (user.role !== v.role) changes.push(`role ${user.role}->${v.role}`);
+  if (user.active !== v.active) changes.push(v.active ? "activated" : "deactivated");
+  if (user.name !== v.name || (user.credentials || "") !== v.credentials || (user.npi || "") !== v.npi) changes.push("profile");
+  audit(req, "update", "user", user.id, null, changes.join("; ") || "no changes");
+  if (user.active === 1 && v.active === 0) {
+    const n = req.db.prepare("DELETE FROM sessions WHERE user_id = ?").run(user.id).changes;
+    audit(req, "deactivate", "user", user.id, null, `sessions_revoked=${n}`);
+  }
+  req.flash("success", `Saved ${v.name}.`);
+  res.redirect(`/ehr/admin/users/${user.id}/edit`);
+});
+
+router.post("/admin/users/:id/reset-password", adminOnly, (req, res) => {
+  const user = loadUserWithLock(req, req.params.id);
+  if (!user) return notFound(req, res, "User");
+  const password = typeof req.body.password === "string" ? req.body.password : "";
+  const err = passwordPolicyError(password);
+  if (err) return res.status(400).send(editUserForm(req, user, user, [err]));
+  req.db.prepare("UPDATE users SET password_hash = ?, failed_logins = 0, locked_until = NULL WHERE id = ?").run(hashPassword(password), user.id);
+  const n = req.db.prepare("DELETE FROM sessions WHERE user_id = ?").run(user.id).changes;
+  audit(req, "password_reset", "user", user.id, null, `sessions_revoked=${n}`);
+  if (user.id === req.user.id) return res.redirect("/ehr/login"); // own session is gone
+  req.flash("success", `Password reset for ${user.name}. They have been signed out everywhere.`);
+  res.redirect(`/ehr/admin/users/${user.id}/edit`);
+});
+
+router.post("/admin/users/:id/unlock", adminOnly, (req, res) => {
+  const user = getUser(req, req.params.id);
+  if (!user) return notFound(req, res, "User");
+  req.db.prepare("UPDATE users SET failed_logins = 0, locked_until = NULL WHERE id = ?").run(user.id);
+  audit(req, "unlock", "user", user.id);
+  req.flash("success", `${user.name} unlocked.`);
+  res.redirect(`/ehr/admin/users/${user.id}/edit`);
+});
+
+/* ------------------------------------------------------------------ */
+/* Audit log                                                          */
+/* ------------------------------------------------------------------ */
+function auditFilters(req) {
+  const q = req.query;
+  const f = {
+    user_id: /^\d+$/.test(str(q.user_id)) ? str(q.user_id) : "",
+    mrn: str(q.mrn).slice(0, 40),
+    action: str(q.action).slice(0, 60),
+    entity_type: str(q.entity_type).slice(0, 60),
+    from: isYmd(str(q.from)) ? str(q.from) : "",
+    to: isYmd(str(q.to)) ? str(q.to) : "",
+  };
+  const where = [];
+  const params = [];
+  if (f.user_id) { where.push("a.user_id = ?"); params.push(Number(f.user_id)); }
+  if (f.mrn) { where.push("p.mrn = ?"); params.push(f.mrn); }
+  if (f.action) { where.push("a.action = ?"); params.push(f.action); }
+  if (f.entity_type) { where.push("a.entity_type = ?"); params.push(f.entity_type); }
+  if (f.from) { where.push("a.ts >= ?"); params.push(f.from); }
+  if (f.to) { where.push("a.ts < date(?, '+1 day')"); params.push(f.to); }
+  const summary = Object.entries(f).filter(([, v]) => v).map(([k, v]) => `${k}=${v}`).join(" ");
+  return { f, sql: where.length ? "WHERE " + where.join(" AND ") : "", params, summary };
+}
+
+const AUDIT_SELECT = `
+  SELECT a.*, u.name AS user_name, u.email AS user_email, p.mrn, p.first_name, p.last_name, p.preferred_name
+  FROM audit_log a LEFT JOIN users u ON u.id = a.user_id LEFT JOIN patients p ON p.id = a.patient_id`;
+
+function qs(f, extra = {}) {
+  const p = new URLSearchParams();
+  for (const [k, v] of Object.entries({ ...f, ...extra })) if (v !== "" && v != null) p.set(k, String(v));
+  const s = p.toString();
+  return s ? "?" + s : "";
+}
+
+router.get("/admin/audit", adminOnly, (req, res) => {
+  const db = req.db;
+  const { f, sql, params, summary } = auditFilters(req);
+  const pg = Math.max(1, Math.min(100000, parseInt(req.query.page, 10) || 1));
+  const rows = db.prepare(`${AUDIT_SELECT} ${sql} ORDER BY a.ts DESC, a.id DESC LIMIT ? OFFSET ?`)
+    .all(...params, PAGE_SIZE + 1, (pg - 1) * PAGE_SIZE);
+  const hasNext = rows.length > PAGE_SIZE;
+  if (hasNext) rows.pop();
+  audit(req, "view", "audit_log", null, null, `page=${pg}${summary ? " " + summary : ""}`);
+
+  const users = db.prepare("SELECT id, name FROM users ORDER BY name").all();
+  const actions = db.prepare("SELECT DISTINCT action FROM audit_log ORDER BY action").all().map((r) => r.action);
+  const entities = db.prepare("SELECT DISTINCT entity_type FROM audit_log WHERE entity_type IS NOT NULL ORDER BY entity_type").all().map((r) => r.entity_type);
+  const anyOpt = { value: "", label: "Any" };
+  const mrnPatient = f.mrn ? db.prepare("SELECT id FROM patients WHERE mrn = ?").get(f.mrn) : null;
+
+  res.send(page(req, {
+    title: "Audit log",
+    active: "admin",
+    body: html`
+      <div class="page-head row"><h1>Audit log</h1><span class="spacer"></span>
+        <a class="btn" href="/ehr/admin/audit.csv${qs(f)}">Export CSV</a></div>
+      <form class="card" method="get" action="/ehr/admin/audit">
+        <div class="form-grid">
+          <label for="user_id">User ${select("user_id", [anyOpt, ...users.map((u) => ({ value: u.id, label: u.name }))], f.user_id)}</label>
+          <label>Patient MRN <input name="mrn" value="${f.mrn}" placeholder="CR-000001"></label>
+          <label for="action">Action ${select("action", [anyOpt, ...actions.map((a) => ({ value: a, label: a }))], f.action)}</label>
+          <label for="entity_type">Entity ${select("entity_type", [anyOpt, ...entities.map((e) => ({ value: e, label: e }))], f.entity_type)}</label>
+          <label>From <span class="hint">UTC date</span><input type="date" name="from" value="${f.from}"></label>
+          <label>To <span class="hint">UTC date, inclusive</span><input type="date" name="to" value="${f.to}"></label>
+        </div>
+        <div class="form-actions"><button class="btn btn--primary" type="submit">Filter</button><a class="btn btn--ghost" href="/ehr/admin/audit">Clear</a>
+          ${mrnPatient ? html`<a class="btn btn--ghost" href="/ehr/admin/patients/${mrnPatient.id}/access-report">Access report for ${f.mrn}</a>` : ""}</div>
+      </form>
+      <section class="card table-wrap">
+        ${rows.length ? auditTable(rows, { showPatient: true }) : html`<p class="muted">No audit events match these filters.</p>`}
+        <div class="form-actions">
+          ${pg > 1 ? html`<a class="btn btn--sm" href="/ehr/admin/audit${qs(f, { page: pg - 1 })}">Newer</a>` : ""}
+          <span class="muted small">Page ${pg}</span>
+          ${hasNext ? html`<a class="btn btn--sm" href="/ehr/admin/audit${qs(f, { page: pg + 1 })}">Older</a>` : ""}
+        </div>
+      </section>`,
+  }));
+});
+
+function auditTable(rows, { showPatient }) {
+  return html`
+    <table class="table">
+      <thead><tr><th>When</th><th>User</th><th>Action</th><th>Entity</th>${showPatient ? html`<th>Patient</th>` : ""}<th>IP</th><th>Detail</th></tr></thead>
+      <tbody>${rows.map((r) => html`
+        <tr>
+          <td title="${r.ts} UTC">${fmtTimestamp(r.ts)}</td>
+          <td>${r.user_name || html`<span class="muted">${r.user_id ? `#${r.user_id}` : "Anonymous"}</span>`}</td>
+          <td>${r.action}</td>
+          <td>${r.entity_type || ""}${r.entity_id != null ? ` #${r.entity_id}` : ""}</td>
+          ${showPatient ? html`<td>${r.patient_id
+            ? (r.mrn ? html`<a href="/ehr/patients/${r.patient_id}">${patientName(r)}</a> <span class="muted small">${r.mrn}</span>` : `#${r.patient_id}`)
+            : ""}</td>` : ""}
+          <td>${r.ip || ""}</td>
+          <td>${r.detail || ""}</td>
+        </tr>`)}</tbody>
+    </table>`;
+}
+
+router.get("/admin/audit.csv", adminOnly, (req, res) => {
+  const { sql, params, summary } = auditFilters(req);
+  const rows = req.db.prepare(`${AUDIT_SELECT} ${sql} ORDER BY a.ts DESC, a.id DESC`).all(...params);
+  audit(req, "export", "audit_log", null, null, `rows=${rows.length}${summary ? " " + summary : ""}`);
+  let out = csvRow(["id", "timestamp_utc", "user_id", "user_name", "user_email", "action", "entity_type", "entity_id",
+    "patient_id", "patient_mrn", "patient_name", "ip", "detail"]);
+  for (const r of rows) {
+    out += csvRow([r.id, r.ts, r.user_id, r.user_name, r.user_email, r.action, r.entity_type, r.entity_id,
+      r.patient_id, r.mrn, r.mrn ? patientName(r) : "", r.ip, r.detail]);
+  }
+  const stamp = new Date().toISOString().slice(0, 10);
+  res.set("Content-Type", "text/csv; charset=utf-8");
+  res.set("Content-Disposition", `attachment; filename="audit-log-${stamp}.csv"`);
+  res.send(out);
+});
+
+/* ------------------------------------------------------------------ */
+/* Patient access report (accounting of disclosures)                  */
+/* ------------------------------------------------------------------ */
+router.get("/admin/patients/:id/access-report", adminOnly, (req, res) => {
+  if (!/^\d+$/.test(req.params.id)) return notFound(req, res, "Patient");
+  const patient = getPatient(req, req.params.id);
+  if (!patient) return notFound(req, res, "Patient");
+  const rows = req.db.prepare(`${AUDIT_SELECT} WHERE a.patient_id = ? ORDER BY a.ts DESC, a.id DESC`).all(patient.id);
+  const byUser = req.db.prepare(
+    `SELECT u.name, u.role, COUNT(*) AS n, MAX(a.ts) AS last_ts FROM audit_log a LEFT JOIN users u ON u.id = a.user_id
+     WHERE a.patient_id = ? GROUP BY a.user_id ORDER BY n DESC`).all(patient.id);
+  audit(req, "view", "access_report", patient.id, patient.id, `events=${rows.length}`);
+  res.send(page(req, {
+    title: `Access report: ${patient.mrn}`,
+    active: "admin",
+    body: html`
+      <div class="page-head">
+        <h1>Access report</h1>
+        <p>${patientName(patient)} · MRN ${patient.mrn} · <a href="/ehr/patients/${patient.id}">Open chart</a> ·
+          <a href="/ehr/admin/audit.csv${qs({ mrn: patient.mrn })}">Export CSV</a></p>
+        <p class="muted small">Every recorded access to or change of this patient's record, newest first. Generated ${fmtTimestamp(new Date().toISOString().replace("T", " ").slice(0, 19))}.</p>
+      </div>
+      <section class="card">
+        <h2>Summary by user</h2>
+        ${byUser.length ? html`<table class="table"><thead><tr><th>User</th><th>Role</th><th>Events</th><th>Most recent</th></tr></thead>
+          <tbody>${byUser.map((b) => html`<tr><td>${b.name || "Anonymous"}</td><td>${b.role ? humanize(b.role) : ""}</td><td>${b.n}</td><td>${fmtTimestamp(b.last_ts)}</td></tr>`)}</tbody></table>`
+          : html`<p class="muted">No recorded access.</p>`}
+      </section>
+      <section class="card table-wrap">
+        <h2>All events (${rows.length})</h2>
+        ${rows.length ? auditTable(rows, { showPatient: false }) : html`<p class="muted">No recorded access.</p>`}
+      </section>`,
+  }));
+});
+
+/* ------------------------------------------------------------------ */
+/* My account (any logged-in user)                                    */
+/* ------------------------------------------------------------------ */
+function accountPage(req, errors = []) {
+  const u = req.db.prepare(`SELECT ${USER_COLS} FROM users WHERE id = ?`).get(req.user.id);
+  return page(req, {
+    title: "My account",
+    active: "account",
+    body: html`
+      <div class="page-head"><h1>My account</h1></div>
+      <div class="grid grid--2">
+        <section class="card">
+          <h2>Profile</h2>
+          <dl class="list-plain">
+            <dt class="muted small">Name</dt><dd>${u.name}</dd>
+            <dt class="muted small">Email</dt><dd>${u.email}</dd>
+            <dt class="muted small">Role</dt><dd>${humanize(u.role)}</dd>
+            <dt class="muted small">Credentials</dt><dd>${u.credentials || "None on file"}</dd>
+            ${u.npi ? html`<dt class="muted small">NPI</dt><dd>${u.npi}</dd>` : ""}
+            <dt class="muted small">Last sign-in</dt><dd>${u.last_login_at ? fmtTimestamp(u.last_login_at) : "Never"}</dd>
+          </dl>
+          <p class="hint">Contact an administrator to change your name, role or credentials.</p>
+        </section>
+        <form class="card stack" method="post" action="/ehr/account/password">
+          ${csrfField(req)}
+          <h2>Change password</h2>
+          ${errorList(errors)}
+          <label>Current password <input type="password" name="current_password" required autocomplete="current-password"></label>
+          <label>New password <span class="hint">12+ characters, 3 of: lowercase, uppercase, number, symbol</span>
+            <input type="password" name="new_password" required minlength="12" autocomplete="new-password"></label>
+          <label>Confirm new password <input type="password" name="confirm_password" required minlength="12" autocomplete="new-password"></label>
+          <p class="hint">Changing your password signs you out on all other devices.</p>
+          <div class="form-actions"><button class="btn btn--primary" type="submit">Change password</button></div>
+        </form>
+      </div>`,
+  });
+}
+
+router.get("/account", (req, res) => res.send(accountPage(req)));
+
+router.post("/account/password", (req, res) => {
+  const cur = typeof req.body.current_password === "string" ? req.body.current_password : "";
+  const next = typeof req.body.new_password === "string" ? req.body.new_password : "";
+  const confirm = typeof req.body.confirm_password === "string" ? req.body.confirm_password : "";
+  const row = req.db.prepare("SELECT password_hash FROM users WHERE id = ?").get(req.user.id);
+  const errors = [];
+  if (!verifyPassword(cur, row.password_hash)) {
+    errors.push("Current password is incorrect.");
+    audit(req, "password_change_failed", "user", req.user.id, null, "wrong current password");
+  } else {
+    const pwErr = passwordPolicyError(next);
+    if (pwErr) errors.push(pwErr);
+    else if (next !== confirm) errors.push("New password and confirmation don't match.");
+    else if (next === cur) errors.push("New password must be different from the current one.");
+  }
+  if (errors.length) return res.status(400).send(accountPage(req, errors));
+
+  req.db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(hashPassword(next), req.user.id);
+  const n = req.db.prepare("DELETE FROM sessions WHERE user_id = ? AND id != ?").run(req.user.id, req.session.id).changes;
+  audit(req, "password_change", "user", req.user.id, null, `other_sessions_revoked=${n}`);
+  req.flash("success", "Password changed.");
+  res.redirect("/ehr/account");
+});
+
+module.exports = { router, csvCell };
