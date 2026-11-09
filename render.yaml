@@ -28,7 +28,7 @@ services:
       - key: EHR_DB_PATH
         value: /var/data/ehr.sqlite
       - key: EHR_TZ
-        value: America/New_York
+        value: America/Phoenix
       - key: EHR_ADMIN_EMAIL
         sync: false
       - key: EHR_ADMIN_PASSWORD
@@ -71,4 +71,4 @@ services:
       - key: EHR_DEMO
         value: "1"
       - key: EHR_TZ
-        value: America/New_York
+        value: America/Phoenix

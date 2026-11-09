@@ -32,6 +32,8 @@ function migrate(db, schema) {
   const ADD_COLUMNS = {
     // HIPAA hardening (see docs/hipaa/)
     users: [
+      ["supervisor_id", "INTEGER REFERENCES users(id)"],  // clinical supervisor who co-signs this user's notes
+      ["requires_cosign", "INTEGER"],         // 1 / 0 override; NULL = decide from credentials (src/supervision.js)
       ["education_level", "TEXT"],            // AHCCCS modifier HM/HN/HO/HP; derived from credentials when empty
       ["mfa_secret", "TEXT"],                 // base32 TOTP secret (encrypted at rest when EHR_DATA_KEY is set)
       ["mfa_enabled", "INTEGER NOT NULL DEFAULT 0"],
@@ -46,6 +48,12 @@ function migrate(db, schema) {
     patients: [
       ["ahcccs_id", "TEXT"],                  // AHCCCS member ID (e.g. A12345678)
       ["gender", "TEXT"],                     // AHCCCS expects gender in member demographics
+    ],
+    notes: [
+      ["cosign_required", "INTEGER NOT NULL DEFAULT 0"],
+      ["cosign_due_at", "TEXT"],              // UTC 'YYYY-MM-DD HH:MM:SS'
+      ["cosigned_by", "INTEGER REFERENCES users(id)"],
+      ["cosigned_at", "TEXT"],
     ],
     charges: [
       ["pos", "TEXT"],                        // place of service (member's location for telehealth under AHCCCS)
@@ -99,7 +107,12 @@ function migrate(db, schema) {
     try {
       tx(db, () => {
         db.exec(create);
-        db.exec(`INSERT INTO ${table}_new SELECT * FROM ${table};`);
+        // Carry over columns added later by ADD_COLUMNS, then copy by explicit column list.
+        const newCols = new Set(db.prepare(`PRAGMA table_info(${table}_new)`).all().map((c) => c.name));
+        const oldCols = db.prepare(`PRAGMA table_info(${table})`).all();
+        for (const c of oldCols) if (!newCols.has(c.name)) db.exec(`ALTER TABLE ${table}_new ADD COLUMN ${c.name} ${c.type || ""}`);
+        const cols = oldCols.map((c) => c.name).join(", ");
+        db.exec(`INSERT INTO ${table}_new (${cols}) SELECT ${cols} FROM ${table};`);
         db.exec(`DROP TABLE ${table};`);
         db.exec(`ALTER TABLE ${table}_new RENAME TO ${table};`);
         indexes.forEach((sql) => db.exec(sql));

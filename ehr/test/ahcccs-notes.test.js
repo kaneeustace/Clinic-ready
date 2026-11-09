@@ -220,35 +220,36 @@ test("intake: AHCCCS assessment domains required for AHCCCS members only", async
   t.db.prepare("UPDATE patients SET dob = '1990-05-05' WHERE id = ?").run(idOnly);
 });
 
-test("BHT intake needs a licensed BHP co-sign within 72 hours", async () => {
+test("BHT intake goes to the supervisor for co-signature within 48 hours", async () => {
   t.db.prepare("UPDATE users SET credentials = 'BHT' WHERE id = ?").run(t.ctx.users.therapist2);
   try {
     const bht = await t.login("therapist2");
     const id = await create(bht, mercy, intake({}, { ahcccs: true }));
     assert.equal((await bht.post(`/ehr/notes/${id}/sign`, { password: PW })).status, 302);
     const v = await bht.get(`/ehr/notes/${id}`);
-    assert.match(v.text, /Co-signature required/);
-    assert.doesNotMatch(v.text, /Co-sign assessment/); // the signer can't co-sign
+    assert.match(v.text, /Awaiting supervisor co-signature/);
+    assert.match(v.text, /data-deadline=/);
+    assert.doesNotMatch(v.text, /Co-sign note/); // the signer can't co-sign
     // The prefix can't be forged through a normal addendum.
     assert.equal((await bht.post(`/ehr/notes/${id}/addenda`, { content: "Co-signed by licensed BHP: me" })).status, 400);
 
     // Overdue co-sign is flagged by the compliance check.
-    t.db.prepare("UPDATE notes SET signed_at = datetime('now', '-4 days') WHERE id = ?").run(id);
+    t.db.prepare("UPDATE notes SET signed_at = datetime('now', '-4 days'), cosign_due_at = datetime('now', '-2 days') WHERE id = ?").run(id);
     const lic = await t.login("therapist");
     const r = await lic.post(`/ehr/notes/${id}/compliance-review`);
-    assert.match(r.text, /co-signed by a licensed BHP within 72 hours/);
-    assert.match(r.text, /Co-signature overdue/);
+    assert.match(r.text, /Supervisor co-signature is overdue/);
+    assert.match(r.text, /Overdue by/);
 
     assert.equal((await lic.post(`/ehr/notes/${id}/cosign`, { password: "wrong" })).status, 400);
     assert.equal((await lic.post(`/ehr/notes/${id}/cosign`, { password: PW, comment: "Agree with F41.1." })).status, 302);
     const after = await lic.get(`/ehr/notes/${id}`);
-    assert.match(after.text, /Co-signed by licensed BHP: Taylor Therapist, LCSW on/);
+    assert.match(after.text, /Co-signed by supervisor Taylor Therapist, LCSW on/);
     assert.ok(t.db.prepare("SELECT 1 FROM audit_log WHERE action = 'cosign' AND entity_id = ?").get(id));
     assert.equal((await lic.post(`/ehr/notes/${id}/cosign`, { password: PW })).status, 403);
     // Licensed signers don't need a co-sign.
     const own = await create(lic, mercy, intake({}, { ahcccs: true }));
     await lic.post(`/ehr/notes/${own}/sign`, { password: PW });
-    assert.doesNotMatch((await lic.get(`/ehr/notes/${own}`)).text, /Co-signature required/);
+    assert.doesNotMatch((await lic.get(`/ehr/notes/${own}`)).text, /Awaiting supervisor co-signature/);
   } finally {
     t.db.prepare("UPDATE users SET credentials = 'LPC' WHERE id = ?").run(t.ctx.users.therapist2);
   }

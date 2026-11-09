@@ -10,6 +10,8 @@ const { can } = require("../permissions");
 const { audit } = require("../audit");
 const { tx } = require("../db");
 const { reviewNote } = require("../ai-review");
+const supervision = require("../supervision");
+const { countdown } = require("../countdown");
 const { isAhcccs } = require("../payers");
 const {
   html, raw, page, chartPage, notFound, csrfField, select, badge, getPatient, patientName,
@@ -482,6 +484,13 @@ const cloneMessage = (m) => `This note's narrative is ${m.similarity >= 0.999 ? 
 
 /** Co-signature (licensed BHP review of an unlicensed clinician's assessment) for a signed intake note. */
 function cosignStatus(db, note) {
+  if (note.cosign_required) {
+    const by = note.cosigned_by ? db.prepare("SELECT name, credentials FROM users WHERE id = ?").get(note.cosigned_by) : null;
+    const dueMs = supervision.utcToMs(note.cosign_due_at);
+    const at = note.cosigned_at ? supervision.utcToMs(note.cosigned_at) : Date.now();
+    return { required: true, cosigned: !!note.cosigned_at, by: by ? userLine(by) : null, cosigned_at: note.cosigned_at,
+      due_at: note.cosign_due_at, overdue: dueMs != null && at > dueMs, general: true };
+  }
   if (note.type !== "intake" || note.status !== "signed" || !needsCosign(note.signer_credentials)) return { required: false };
   const row = db.prepare(`SELECT a.created_at, u.name, u.credentials FROM note_addenda a JOIN users u ON u.id = a.author_id
     WHERE a.note_id = ? AND a.content LIKE ? ORDER BY a.id LIMIT 1`).get(note.id, `${COSIGN_PREFIX}%`);
@@ -1077,21 +1086,28 @@ function signatureLine(note) {
 }
 
 function cosignLine(cs) {
+  if (cs.general) {
+    if (cs.cosigned) return html`<p class="signature cosign">Co-signed by supervisor ${cs.by} on ${signedStamp(cs.cosigned_at)}${cs.overdue ? html` <span class="badge badge--warn">after the ${supervision.COSIGN_HOURS()}-hour deadline</span>` : ""}</p>`;
+    return html`<p class="signature cosign cosign--pending"><span class="badge badge--${cs.overdue ? "bad" : "warn"}">Awaiting supervisor co-signature</span>
+      ${countdown(cs.due_at)} <span class="muted">(due ${signedStamp(cs.due_at)})</span></p>`;
+  }
   if (cs.cosigned) {
     return html`<p class="signature cosign">${COSIGN_PREFIX}: ${cs.by} on ${signedStamp(cs.cosigned_at)}${cs.overdue ? html` <span class="badge badge--warn">after ${COSIGN_HOURS} hours</span>` : ""}</p>`;
   }
   return html`<p class="signature cosign cosign--pending"><span class="badge badge--${cs.overdue ? "bad" : "warn"}">${cs.overdue ? "Co-signature overdue" : "Co-signature required"}</span>
     The signer isn't a licensed BHP. A licensed BHP must review and co-sign this assessment within ${COSIGN_HOURS} hours (by ${signedStamp(cs.due_at)}; AMPM 320-O).</p>`;
 }
-
 function cosignForm(req, note, errs) {
-  if (!can(req.user, "clinical:write") || req.user.id === note.signed_by || !isLicensed(req.user.credentials)) return "";
-  return html`<section class="card no-print" aria-labelledby="cosign-h"><h2 id="cosign-h">Co-sign as licensed BHP</h2>
+  if (!can(req.user, "clinical:write") || req.user.id === note.signed_by) return "";
+  const author = req.db.prepare("SELECT * FROM users WHERE id = ?").get(note.author_id);
+  if (note.cosign_required ? !supervision.mayCosign(req.user, author) : !isLicensed(req.user.credentials)) return "";
+  const general = !!note.cosign_required;
+  return html`<section class="card no-print" aria-labelledby="cosign-h"><h2 id="cosign-h">${general ? "Co-sign as supervisor" : "Co-sign as licensed BHP"}</h2>
     ${errs.cosign ? html`<div class="alert alert--error" role="alert">${errs.cosign}</div>` : ""}
     <form method="post" action="/ehr/notes/${note.id}/cosign" class="stack">${csrfField(req)}
       <label>Review comment <span class="hint">Optional.</span><textarea name="comment" rows="2" maxlength="2000"></textarea></label>
       <label>Password <input type="password" name="password" autocomplete="current-password" required></label>
-      <div><button class="btn btn--primary" type="submit">Co-sign assessment</button></div>
+      <div><button class="btn btn--primary" type="submit">${general ? "Co-sign note" : "Co-sign assessment"}</button></div>
     </form></section>`;
 }
 
@@ -1212,7 +1228,7 @@ function renderNote(req, res, { note, patient }, { signErrs = {}, addendumError 
       ${signatureLine(note)}
       ${cosign.required ? cosignLine(cosign) : ""}
     </article>
-    ${cosign.required && !cosign.cosigned && ahcccs ? cosignForm(req, note, signErrs) : ""}
+    ${cosign.required && !cosign.cosigned && (ahcccs || cosign.general) ? cosignForm(req, note, signErrs) : ""}
     ${signForm}
     ${addendaSection}`;
   res.status(status).send(chartPage(req, patient, "notes", body, { title: `${typeLabel(note)} · ${patientName(patient)}` }));
@@ -1461,6 +1477,12 @@ router.post("/notes/:noteId/sign", requirePerm("clinical:write"), (req, res) => 
        content = CASE WHEN ? THEN json_set(?, '$.late_entry_at', datetime('now')) ELSE content END
      WHERE id = ? AND author_id = ? AND status = 'draft'`).run(req.user.id, late.late ? 1 : 0, JSON.stringify(c), note.id, req.user.id);
   if (r.changes !== 1) return deny(req, res, "This note is already signed.");
+  const author = req.db.prepare("SELECT * FROM users WHERE id = ?").get(req.user.id);
+  if (supervision.requiresCosign(author) && !supervision.NO_COSIGN_TYPES.includes(note.type)) {
+    req.db.prepare(`UPDATE notes SET cosign_required = 1, cosign_due_at = datetime('now', ?) WHERE id = ?`)
+      .run(`+${supervision.COSIGN_HOURS()} hours`, note.id);
+    req.flash("info", `Sent to your supervisor for co-signature (due within ${supervision.COSIGN_HOURS()} hours).`);
+  }
   audit(req, "sign", "note", note.id, patient.id, [late.late ? "late entry" : "", clone ? `similar to note ${clone.note_id}` : ""].filter(Boolean).join("; ") || null);
   req.flash("success", "Note signed.");
   if (late.late && !lateReason) req.flash("warn", "Signed as a late entry without a reason. Add an addendum explaining the delay.");
@@ -1474,9 +1496,12 @@ router.post("/notes/:noteId/cosign", requirePerm("clinical:write"), (req, res) =
   const { note, patient } = loaded;
   const cs = cosignStatus(req.db, note);
   if (!cs.required) return deny(req, res, "This note doesn't need a co-signature.");
-  if (cs.cosigned) return deny(req, res, "This assessment is already co-signed.");
+  if (cs.cosigned) return deny(req, res, "This note is already co-signed.");
   if (req.user.id === note.signed_by) return deny(req, res, "A different, licensed clinician must co-sign.");
-  if (!isLicensed(req.user.credentials)) return deny(req, res, "Only a licensed BHP can co-sign an assessment.");
+  if (cs.general) {
+    const author = req.db.prepare("SELECT * FROM users WHERE id = ?").get(note.author_id);
+    if (!supervision.mayCosign(req.user, author)) return deny(req, res, "Only the clinician's assigned supervisor (or an administrator) can co-sign this note.");
+  } else if (!isLicensed(req.user.credentials)) return deny(req, res, "Only a licensed BHP can co-sign an assessment.");
   const pw = typeof req.body.password === "string" ? req.body.password : "";
   const stored = req.db.prepare("SELECT password_hash FROM users WHERE id = ?").get(req.user.id);
   if (!pw || !stored || !verifyPassword(pw, stored.password_hash)) {
@@ -1484,10 +1509,15 @@ router.post("/notes/:noteId/cosign", requirePerm("clinical:write"), (req, res) =
     return renderNote(req, res, loaded, { signErrs: { cosign: "Password is incorrect. Re-enter your password to co-sign." }, status: 400 });
   }
   const comment = str(req.body.comment).slice(0, 2000);
-  req.db.prepare("INSERT INTO note_addenda (note_id, author_id, content) VALUES (?, ?, ?)")
-    .run(note.id, req.user.id, `${COSIGN_PREFIX}: reviewed and agree with this assessment.${comment ? ` ${comment}` : ""}`);
+  if (cs.general) {
+    req.db.prepare("UPDATE notes SET cosigned_by = ?, cosigned_at = datetime('now') WHERE id = ? AND cosigned_at IS NULL").run(req.user.id, note.id);
+    if (comment) req.db.prepare("INSERT INTO note_addenda (note_id, author_id, content) VALUES (?, ?, ?)").run(note.id, req.user.id, `Supervisor comment: ${comment}`);
+  } else {
+    req.db.prepare("INSERT INTO note_addenda (note_id, author_id, content) VALUES (?, ?, ?)")
+      .run(note.id, req.user.id, `${COSIGN_PREFIX}: reviewed and agree with this assessment.${comment ? ` ${comment}` : ""}`);
+  }
   audit(req, "cosign", "note", note.id, patient.id);
-  req.flash("success", "Assessment co-signed.");
+  req.flash("success", "Note co-signed.");
   res.redirect(`/ehr/notes/${note.id}`);
 });
 

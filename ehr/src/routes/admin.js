@@ -36,7 +36,7 @@ function isLocked(u) {
   return !!u.is_locked;
 }
 
-const USER_COLS = `id, email, name, credentials, role, npi, education_level, active, failed_logins, locked_until, last_login_at, created_at,
+const USER_COLS = `id, email, name, credentials, role, npi, education_level, supervisor_id, requires_cosign, active, failed_logins, locked_until, last_login_at, created_at,
   mfa_enabled, mfa_enrolled_at, mfa_recovery, password_changed_at, (mfa_secret IS NOT NULL) AS mfa_started,
   (locked_until IS NOT NULL AND locked_until > datetime('now')) AS is_locked`;
 
@@ -46,6 +46,32 @@ const EDU_OPTIONS = [
   { value: "", label: "Auto (from credentials)" }, { value: "HM", label: "HM · less than bachelor's" },
   { value: "HN", label: "HN · bachelor's" }, { value: "HO", label: "HO · master's" }, { value: "HP", label: "HP · doctoral" },
 ];
+const supervision = require("../supervision");
+/** Supervisor + co-signature fields for the user forms. */
+function supFields(req, v, selfId = null) {
+  const sups = req.db.prepare("SELECT id, name, credentials, role, active FROM users WHERE active = 1 ORDER BY name").all()
+    .filter((u) => u.id !== selfId && supervision.canSupervise(u));
+  const auto = supervision.requiresCosign({ role: v.role || "clinician", credentials: v.credentials, requires_cosign: null });
+  return html`
+    <label for="supervisor_id">Clinical supervisor ${select("supervisor_id", [{ value: "", label: "None" }, ...sups.map((u) => ({ value: u.id, label: `${u.name}${u.credentials ? `, ${u.credentials}` : ""}` }))], v.supervisor_id || "")}
+      <span class="hint">Co-signs this person's notes. Required for BHTs, BHPPs and associate-level clinicians.</span></label>
+    <label for="requires_cosign">Notes need supervisor co-signature ${select("requires_cosign", [
+      { value: "", label: `Automatic from credentials (currently: ${auto ? "yes" : "no"})` }, { value: "1", label: "Yes" }, { value: "0", label: "No" }],
+      v.requires_cosign == null ? "" : String(v.requires_cosign))}
+      <span class="hint">Independently licensed clinicians (LCSW, LPC, LMFT, LISAC, psychologists, prescribers) sign on their own.</span></label>`;
+}
+function readSup(req, errors, selfId = null) {
+  const raw = str(req.body.supervisor_id);
+  let supervisor_id = null;
+  if (raw) {
+    const u = /^\d+$/.test(raw) ? req.db.prepare("SELECT * FROM users WHERE id = ?").get(Number(raw)) : null;
+    if (!u || u.id === selfId || !supervision.canSupervise(u)) errors.push("Choose a supervisor who is an active, independently licensed clinician or an administrator.");
+    else supervisor_id = u.id;
+  }
+  const rc = str(req.body.requires_cosign);
+  const requires_cosign = rc === "1" ? 1 : rc === "0" ? 0 : null;
+  return { supervisor_id, requires_cosign };
+}
 const eduField = (v) => html`<label for="education_level">Education level for AHCCCS modifiers ${select("education_level", EDU_OPTIONS, v.education_level || "")}<span class="hint">Used to suggest HM/HN/HO/HP on AHCCCS HCPCS charges.</span></label>`;
 
 function mfaBadge(u) {
@@ -168,6 +194,7 @@ function newUserForm(req, v = {}, errors = []) {
           <label>Credentials <span class="hint">e.g. LCSW, MD</span><input name="credentials" value="${v.credentials || ""}" maxlength="60"></label>
           <label>NPI <span class="hint">10 digits, optional</span><input name="npi" value="${v.npi || ""}" inputmode="numeric" pattern="\\d{10}" maxlength="10"></label>
           ${eduField(v)}
+          ${supFields(req, v)}
           <label>Initial password <span class="hint">12+ characters, 3 of: lowercase, uppercase, number, symbol</span>
             <input type="password" name="password" required minlength="12" autocomplete="new-password"></label>
         </div>
@@ -191,13 +218,14 @@ router.post("/admin/users", adminOnly, (req, res) => {
   if (!ROLES.includes(v.role)) errors.push("Choose a valid role.");
   if (v.npi && !/^\d{10}$/.test(v.npi)) errors.push("NPI must be exactly 10 digits.");
   if (v.education_level && !EDU_LEVELS.includes(v.education_level)) errors.push("Choose a valid education level.");
+  Object.assign(v, readSup(req, errors));
   const pwErr = passwordPolicyError(password);
   if (pwErr) errors.push(pwErr);
   if (errors.length) return res.status(400).send(newUserForm(req, v, errors));
 
   const id = Number(req.db.prepare(
-    "INSERT INTO users (email, name, role, credentials, npi, education_level, password_hash, password_changed_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))"
-  ).run(v.email, v.name, v.role, v.credentials || null, v.npi || null, v.education_level || null, hashPassword(password)).lastInsertRowid);
+    "INSERT INTO users (email, name, role, credentials, npi, education_level, supervisor_id, requires_cosign, password_hash, password_changed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))"
+  ).run(v.email, v.name, v.role, v.credentials || null, v.npi || null, v.education_level || null, v.supervisor_id, v.requires_cosign, hashPassword(password)).lastInsertRowid);
   audit(req, "create", "user", id, null, `role=${v.role}`);
   req.flash("success", `User ${v.name} created.`);
   res.redirect("/ehr/admin/users");
@@ -222,6 +250,7 @@ function editUserForm(req, user, v = user, errors = []) {
             <label>Credentials <input name="credentials" value="${v.credentials || ""}" maxlength="60"></label>
             <label>NPI <span class="hint">10 digits, optional</span><input name="npi" value="${v.npi || ""}" inputmode="numeric" pattern="\\d{10}" maxlength="10"></label>
             ${eduField(v)}
+            ${supFields(req, v, user.id)}
             <label for="active">Status ${select("active", [{ value: "1", label: "Active" }, { value: "0", label: "Inactive (cannot sign in)" }], String(v.active))}</label>
           </div>
           ${self ? html`<p class="hint">You can't deactivate your own account or remove your own admin role.</p>` : ""}
@@ -283,16 +312,18 @@ router.post("/admin/users/:id/edit", adminOnly, (req, res) => {
   if (!ROLES.includes(v.role)) errors.push("Choose a valid role.");
   if (v.npi && !/^\d{10}$/.test(v.npi)) errors.push("NPI must be exactly 10 digits.");
   if (v.education_level && !EDU_LEVELS.includes(v.education_level)) errors.push("Choose a valid education level.");
+  Object.assign(v, readSup(req, errors, user.id));
   if (user.id === req.user.id) {
     if (v.active === 0) errors.push("You can't deactivate your own account.");
     if (v.role !== "admin") errors.push("You can't remove your own admin role.");
   }
   if (errors.length) return res.status(400).send(editUserForm(req, user, v, errors));
 
-  req.db.prepare("UPDATE users SET name = ?, role = ?, credentials = ?, npi = ?, education_level = ?, active = ? WHERE id = ?")
-    .run(v.name, v.role, v.credentials || null, v.npi || null, v.education_level || null, v.active, user.id);
+  req.db.prepare("UPDATE users SET name = ?, role = ?, credentials = ?, npi = ?, education_level = ?, supervisor_id = ?, requires_cosign = ?, active = ? WHERE id = ?")
+    .run(v.name, v.role, v.credentials || null, v.npi || null, v.education_level || null, v.supervisor_id, v.requires_cosign, v.active, user.id);
   const changes = [];
   if (user.role !== v.role) changes.push(`role ${user.role}->${v.role}`);
+  if ((user.supervisor_id || null) !== v.supervisor_id || (user.requires_cosign ?? null) !== v.requires_cosign) changes.push("supervision");
   if (user.active !== v.active) changes.push(v.active ? "activated" : "deactivated");
   if (user.name !== v.name || (user.credentials || "") !== v.credentials || (user.npi || "") !== v.npi || (user.education_level || "") !== v.education_level) changes.push("profile");
   audit(req, "update", "user", user.id, null, changes.join("; ") || "no changes");

@@ -1,6 +1,7 @@
 "use strict";
 const express = require("express");
 const { can } = require("../permissions");
+const { buildWorkboard, renderWorkboard } = require("../workboard");
 const { html, page, badge, fmtTime, fmtDate, today, addDays, nowLocal, patientName, humanize } = require("../views");
 
 const router = express.Router();
@@ -42,6 +43,7 @@ router.get("/", (req, res) => {
     active: "dashboard",
     body: html`
       <div class="page-head"><div><h1>Good ${Number(nowLocal().slice(11, 13)) < 12 ? "morning" : Number(nowLocal().slice(11, 13)) < 17 ? "afternoon" : "evening"}, ${u.name.split(" ")[0]}</h1><p>${fmtDate(t)} · ${appts.length} ${mineOnly ? "of your " : ""}appointment${appts.length === 1 ? "" : "s"} on today's schedule</p></div></div><div class="row no-print" style="margin-top:-.5rem;margin-bottom:1.25rem">${can(u, "patients:write") ? html`<a class="btn btn--primary btn--sm" href="/ehr/patients/new">New patient</a>` : ""}${can(u, "schedule:write") ? html`<a class="btn btn--sm" href="/ehr/schedule/new">Book appointment</a>` : ""}</div>
+      ${can(u, "clinical:write") ? renderWorkboard(buildWorkboard(db, u)) : ""}
       <div class="tiles">
         ${tile(mineOnly ? "My appointments today" : "Appointments today", appts.length, "/ehr/schedule")}
         ${tile("My unsigned notes", drafts, "/ehr/notes")}

@@ -379,3 +379,19 @@ dl.facts.plan-facts { grid-template-columns: minmax(110px, 34%) minmax(0, 1fr); 
   .print-id { display: block; position: fixed; bottom: 0; left: 0; right: 0; padding: 4px 0; border-top: 1px solid #ccc; background: #fff; font-size: 9pt; color: #333; }
   .chart-body { padding-bottom: 28px; }
 }
+
+/* Dashboard workboard */
+.wb { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); }
+.wb-col { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: .75rem; min-width: 0; }
+.wb-col h3 { display: flex; align-items: center; gap: .5rem; font-size: .8rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 .6rem; }
+.wb-col--todo { border-top: 3px solid var(--primary); }
+.wb-col--progress { border-top: 3px solid #f59e0b; }
+.wb-col--done { border-top: 3px solid var(--good); }
+.wb-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .5rem; }
+.wb-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: .65rem .75rem; box-shadow: var(--shadow); display: grid; gap: .3rem; }
+.wb-card__top { display: flex; justify-content: space-between; align-items: center; gap: .5rem; flex-wrap: wrap; }
+.wb-card__top a { text-decoration: none; }
+.wb-card__title, .wb-card__what { margin: 0; }
+.wb-card .btn { justify-self: start; }
+.countdown { font-variant-numeric: tabular-nums; }
+.wb-alert .row { flex-wrap: wrap; }

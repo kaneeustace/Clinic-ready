@@ -80,7 +80,7 @@ function ahcccsContext(db, note, plan) {
   const full = notes.signErrors(note, member);
   const missing = Object.entries(full).filter(([k]) => !(k in base) && !["audio_only_minutes", "session_start", "session_end"].includes(k)).map(([, v]) => v);
   const clone = notes.findClone(db, note);
-  const cosign = note.type === "intake" ? notes.cosignStatus(db, note) : { required: false };
+  const cosign = notes.cosignStatus(db, note);
   return {
     plan: planInfo,
     fields: {
@@ -91,7 +91,7 @@ function ahcccsContext(db, note, plan) {
       ahcccs_missing: missing,
       cloned_from: clone ? { service_date: clone.service_date, similarity: Math.round(clone.similarity * 100) / 100 } : null,
       late_entry_pending: note.status === "draft" && notes.lateInfo(note).late,
-      cosign: cosign.required ? { cosigned: cosign.cosigned, overdue: cosign.overdue } : null,
+      cosign: cosign.required ? { cosigned: cosign.cosigned, overdue: cosign.overdue, general: !!cosign.general, due_at: cosign.due_at } : null,
     },
   };
 }
@@ -164,6 +164,11 @@ function ruleChecks(ctx) {
     out.push(finding("medium", "Medical necessity", "The note doesn't describe current symptoms, functional impairment or measures.", "Document the symptoms and functional problems being treated and how they changed this session."));
   }
   if (ctx.ahcccs) out.push(...ahcccsChecks(ctx));
+  if (ctx.cosign && ctx.cosign.general && !ctx.cosign.cosigned) {
+    out.push(finding(ctx.cosign.overdue ? "high" : "medium", "Signature",
+      ctx.cosign.overdue ? "Supervisor co-signature is overdue." : "Waiting on the supervisor's co-signature.",
+      "The clinician's supervisor must review and co-sign; payers may deny services documented by supervisees without it."));
+  }
   return out;
 }
 
@@ -274,7 +279,9 @@ function ahcccsChecks(ctx) {
   if (["progress", "group"].includes(ctx.note_type) && mins != null && mins > 60 && !String(c.long_session_justification || "").trim()) {
     out.push(finding("medium", "Time", `The session ran ${mins} minutes without a justification for exceeding 60 minutes (CBHSG counseling #5).`, "Document why the longer session was clinically necessary."));
   }
-  if (ctx.cosign && !ctx.cosign.cosigned && ctx.cosign.overdue) {
+  if (ctx.cosign && ctx.cosign.general) {
+    // Supervisor co-signature (any note by a supervisee); see src/supervision.js.
+  } else if (ctx.cosign && !ctx.cosign.cosigned && ctx.cosign.overdue) {
     out.push(finding("high", "Other", "Assessment by an unlicensed clinician hasn't been co-signed by a licensed BHP within 72 hours (AMPM 320-O; A.A.C. R9-10-1011).", "Have a licensed BHP review and co-sign the assessment."));
   } else if (ctx.cosign && ctx.cosign.cosigned && ctx.cosign.overdue) {
     out.push(finding("medium", "Other", "The licensed BHP co-signature came more than 72 hours after the assessment was signed (AMPM 320-O).", "Note the reason for the delay in an addendum."));

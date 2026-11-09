@@ -42,7 +42,21 @@
       if (target && opt && opt.getAttribute("data-latest") !== null && !target.value) target.value = opt.getAttribute("data-latest");
     });
   });
-  // Idle warning: sessions expire server-side; nudge the user after 25 minutes idle.
+  // Live signature countdowns: <span data-deadline="ISO" data-total-hours="24">
+  function tick() {
+    document.querySelectorAll("[data-deadline]").forEach(function (el) {
+      var ms = Date.parse(el.getAttribute("data-deadline")) - Date.now();
+      if (isNaN(ms)) return;
+      var total = Number(el.getAttribute("data-total-hours")) || 24;
+      var abs = Math.abs(ms), d = Math.floor(abs / 864e5), h = Math.floor((abs % 864e5) / 36e5), m = Math.floor((abs % 36e5) / 6e4);
+      var span = d ? d + "d " + h + "h" : h ? h + "h " + m + "m" : m + "m";
+      el.textContent = ms >= 0 ? "Due in " + span : "Overdue by " + span;
+      var tone = ms < 0 ? "bad" : ms < Math.min(6, total / 4) * 36e5 ? "warn" : "info";
+      el.className = el.className.replace(/badge--\w+/, "badge--" + tone);
+    });
+  }
+  if (document.querySelector("[data-deadline]")) { tick(); setInterval(tick, 30000); }
+    // Idle warning: sessions expire server-side; nudge the user after 25 minutes idle.
   var idleMs = 25 * 60 * 1000, timer;
   function reset() { clearTimeout(timer); timer = setTimeout(function () {
     var bar = document.createElement("div");
