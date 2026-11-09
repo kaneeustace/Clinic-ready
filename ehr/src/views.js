@@ -192,7 +192,7 @@ function page(req, { title, active = "", body, bare = false }) {
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/ehr/static/ehr.css?v=3">
+  <link rel="stylesheet" href="/ehr/static/ehr.css?v=4">
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
@@ -240,6 +240,11 @@ function chartPage(req, patient, tab, body, { title } = {}) {
   const flagged = can(req.user, "clinical:read") && req.db.prepare(
     `SELECT 1 FROM assessments WHERE patient_id = ? AND flagged = 1 AND administered_on >= ? LIMIT 1`).get(patient.id, addDays(today(), -30));
   const base = `/ehr/patients/${patient.id}`;
+  // Diagnoses are clinical information (billing staff see codes on charges and superbills instead).
+  const showDx = can(req.user, "clinical:read");
+  const dxRows = showDx ? req.db.prepare(
+    `SELECT icd10_code, description, is_primary FROM diagnoses WHERE patient_id = ? AND status = 'active'
+     ORDER BY is_primary DESC, created_at, id`).all(patient.id) : [];
   const planPill = can(req.user, "clinical:read") ? planBanner(req.db, patient, base) : "";
   const header = html`
     <section class="chart-head" aria-label="Patient summary">
@@ -256,6 +261,11 @@ function chartPage(req, patient, tab, body, { title } = {}) {
           <div><dt>Clinician</dt><dd>${clinician ? `${clinician.name}${clinician.credentials ? `, ${clinician.credentials}` : ""}` : "Unassigned"}</dd></div>
           ${patient.phone ? html`<div><dt>Phone</dt><dd>${patient.phone}</dd></div>` : ""}
         </dl>
+        ${showDx ? html`<div class="chart-head__dx">
+          <span class="chart-head__dx-label">Diagnoses</span>
+          ${dxRows.length ? dxRows.map((d) => html`<span class="dx-chip${d.is_primary ? " dx-chip--primary" : ""}" title="${d.description}${d.is_primary ? " (primary)" : ""}"><strong>${d.icd10_code}</strong> ${d.description}</span>`)
+            : html`<span class="muted small">None recorded${can(req.user, "clinical:write") ? html` · <a href="${base}#diagnoses">add on Overview</a>` : ""}</span>`}
+        </div>` : ""}
         <div class="chart-head__alerts">
           ${allergies.length
             ? html`<span class="pill pill--bad">Allergies: ${allergies.map((a) => a.substance).join(", ")}</span>`

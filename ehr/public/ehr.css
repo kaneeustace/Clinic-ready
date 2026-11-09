@@ -345,3 +345,10 @@ textarea.ta-sm { min-height: 64px; }
 dl.facts.plan-facts { grid-template-columns: minmax(110px, 34%) minmax(0, 1fr); }
 .form-grid--narrow { max-width: 380px; }
 .card.stack > h2 { margin-bottom: 0; }
+
+/* Diagnoses row in the patient banner */
+.chart-head__dx { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .4rem; margin: 0 0 .7rem; }
+.chart-head__dx-label { font-size: .68rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--faint); margin-right: .25rem; }
+.dx-chip { display: inline-flex; gap: .3rem; align-items: baseline; padding: .18rem .6rem; border-radius: 999px; background: var(--info-bg); color: #1d3f9e; font-size: .78rem; border: 1px solid #cddaf9; max-width: 100%; }
+.dx-chip strong { font-weight: 700; }
+.dx-chip--primary { background: var(--primary); color: #fff; border-color: var(--primary); }

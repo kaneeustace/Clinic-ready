@@ -38,6 +38,7 @@ const { can } = require("../permissions");
 const { audit } = require("../audit");
 const { tx } = require("../db");
 const { INSTRUMENTS, isDate, str, intId, errorList } = require("./clinical");
+const { ICD10_COMMON } = require("./patients");
 const {
   html, raw, page, chartPage, notFound, csrfField, select, getPatient, patientName,
   today, addDays, fmtDate, fmtTimestamp, age, humanize,
@@ -408,6 +409,37 @@ function dxList(plan) {
     : muted("No active diagnoses were on the problem list when this plan was created.");
 }
 
+/** Draft-only diagnosis editor: remove / make primary, plus a dropdown to add. */
+function dxEditor(req, plan, patient, pAct) {
+  const dx = planDx(plan);
+  const onPlan = new Set(dx.map((d) => d.code));
+  const active = req.db.prepare(
+    "SELECT icd10_code, description FROM diagnoses WHERE patient_id = ? AND status = 'active' ORDER BY is_primary DESC, icd10_code").all(patient.id)
+    .filter((d) => !onPlan.has(d.icd10_code));
+  const activeCodes = new Set(active.map((d) => d.icd10_code));
+  const common = ICD10_COMMON.filter(([c]) => !onPlan.has(c) && !activeCodes.has(c));
+  const btn = (action, code, label, cls = "btn btn--sm btn--ghost") => html`
+    <form method="post" action="${pAct}/diagnoses/${action}" class="inline-form">${csrfField(req)}
+      <input type="hidden" name="code" value="${code}"><button class="${cls}" type="submit">${label}</button></form>`;
+  return html`
+    ${dx.length ? html`<ul class="list-plain">${dx.map((d) => html`
+      <li class="row"><span><strong>${d.code}</strong> ${d.description}</span>
+        ${d.primary ? html`<span class="pill">Primary</span>` : btn("primary", d.code, "Make primary")}
+        <span class="spacer"></span>${btn("remove", d.code, "Remove", "btn btn--sm btn--danger")}</li>`)}</ul>`
+      : muted("No diagnoses on this plan yet.")}
+    <form method="post" action="${pAct}/diagnoses/add" class="row no-print" style="margin-top:.75rem">
+      ${csrfField(req)}
+      <label class="visually-hidden" for="dx-add">Add a diagnosis</label>
+      <select id="dx-add" name="code" required style="flex:1 1 260px">
+        <option value="">Add a diagnosis…</option>
+        ${active.length ? html`<optgroup label="On the patient's problem list">${active.map((d) => html`<option value="${d.icd10_code}">${d.icd10_code} ${d.description}</option>`)}</optgroup>` : ""}
+        <optgroup label="Common behavioral health diagnoses">${common.map(([c, desc]) => html`<option value="${c}">${c} ${desc}</option>`)}</optgroup>
+      </select>
+      <label class="check"><input type="checkbox" name="primary" value="1"> Primary</label>
+      <button class="btn btn--sm btn--primary" type="submit">Add</button>
+    </form>`;
+}
+
 function measureBlock(o, { compact = false } = {}) {
   const m = o.measure;
   const inst = o.instrument && INSTRUMENTS[o.instrument];
@@ -658,11 +690,12 @@ function renderPlanTab(req, patient, opts = {}) {
         </dl>
       </section>
       <section class="card" aria-labelledby="pl-dx">
-        <div class="card__head"><h2 id="pl-dx">Diagnoses (snapshot)</h2>
+        <div class="card__head"><h2 id="pl-dx">Diagnoses on this plan</h2>
           ${editable ? html`<form method="post" action="${pAct}/diagnoses" class="inline-form no-print">${csrfField(req)}
             <button class="btn btn--sm" type="submit">Refresh from problem list</button></form>` : ""}</div>
-        ${dxList(plan)}
-        <p class="hint">Captured from the active problem list when the plan was created; it doesn't change when the problem list does.</p>
+        ${editable ? dxEditor(req, plan, patient, pAct) : dxList(plan)}
+        <p class="hint">${editable ? "Pick the diagnoses this plan treats. Codes chosen from the common list are also added to the patient's problem list."
+          : "Captured when the plan was created; it doesn't change when the problem list does."}</p>
       </section>
     </div>
 
@@ -932,6 +965,60 @@ router.post("/treatment-plans/:planId/edit", WRITE, (req, res) => {
   res.redirect(planUrl(plan));
 });
 
+/** Add / remove / make primary a diagnosis on a draft plan's snapshot. */
+function dxChange(req, res, fn) {
+  const found = loadPlan(req);
+  if (!found) return notFound(req, res, "Treatment plan");
+  if (!editableOr409(req, res, found)) return;
+  const { plan, patient } = found;
+  const code = String(req.body.code || "").trim().toUpperCase();
+  if (!code) { req.flash("error", "Choose a diagnosis."); return res.redirect(planUrl(plan)); }
+  const dx = planDx(plan);
+  const msg = fn({ plan, patient, code, dx });
+  if (msg && msg.error) { req.flash("error", msg.error); return res.redirect(planUrl(plan)); }
+  req.db.prepare("UPDATE treatment_plans SET diagnoses = ?, updated_at = datetime('now') WHERE id = ?").run(JSON.stringify(dx), plan.id);
+  audit(req, "update", "treatment_plan", plan.id, patient.id, `diagnosis ${msg.action}`);
+  req.flash("success", msg.flash);
+  res.redirect(planUrl(plan));
+}
+
+router.post("/treatment-plans/:planId/diagnoses/add", WRITE, (req, res) => dxChange(req, res, ({ patient, code, dx }) => {
+  if (dx.some((d) => d.code === code)) return { error: `${code} is already on this plan.` };
+  let row = req.db.prepare("SELECT * FROM diagnoses WHERE patient_id = ? AND icd10_code = ? AND status = 'active'").get(patient.id, code);
+  if (!row) {
+    const common = ICD10_COMMON.find(([c]) => c === code);
+    if (!common) return { error: "Choose a diagnosis from the list." };
+    // Also add it to the patient's problem list so it shows on the chart.
+    const hasPrimary = req.db.prepare("SELECT 1 FROM diagnoses WHERE patient_id = ? AND status = 'active' AND is_primary = 1").get(patient.id);
+    const id = Number(req.db.prepare(`INSERT INTO diagnoses (patient_id, icd10_code, description, status, is_primary, onset_date, created_by)
+      VALUES (?, ?, ?, 'active', ?, ?, ?)`).run(patient.id, code, common[1], hasPrimary ? 0 : 1, today(), req.user.id).lastInsertRowid);
+    audit(req, "create", "diagnosis", id, patient.id, "added from treatment plan");
+    row = { icd10_code: code, description: common[1] };
+  }
+  const makePrimary = req.body.primary === "1" || dx.length === 0;
+  if (makePrimary) dx.forEach((d) => { d.primary = 0; });
+  dx.push({ code, description: row.description, primary: makePrimary ? 1 : 0 });
+  dx.sort((a, b) => b.primary - a.primary);
+  return { action: "added", flash: `${code} added to the plan.` };
+}));
+
+router.post("/treatment-plans/:planId/diagnoses/remove", WRITE, (req, res) => dxChange(req, res, ({ plan, code, dx }) => {
+  const i = dx.findIndex((d) => d.code === code);
+  if (i < 0) return { error: "That diagnosis isn't on this plan." };
+  const linked = req.db.prepare("SELECT title FROM plan_problems WHERE plan_id = ? AND icd10_code = ?").get(plan.id, code);
+  if (linked) return { error: `${code} is linked to the problem "${linked.title}". Change that problem's diagnosis first.` };
+  const [removed] = dx.splice(i, 1);
+  if (removed.primary && dx.length) dx[0].primary = 1;
+  return { action: "removed", flash: `${code} removed from the plan. It stays on the patient's problem list.` };
+}));
+
+router.post("/treatment-plans/:planId/diagnoses/primary", WRITE, (req, res) => dxChange(req, res, ({ code, dx }) => {
+  if (!dx.some((d) => d.code === code)) return { error: "That diagnosis isn't on this plan." };
+  dx.forEach((d) => { d.primary = d.code === code ? 1 : 0; });
+  dx.sort((a, b) => b.primary - a.primary);
+  return { action: "primary set", flash: `${code} is now the plan's primary diagnosis.` };
+}));
+
 router.post("/treatment-plans/:planId/diagnoses", WRITE, (req, res) => {
   const found = loadPlan(req);
   if (!found) return notFound(req, res, "Treatment plan");
@@ -978,7 +1065,7 @@ const LEVELS = {
           <span class="hint">Short name, e.g. "Depressed mood", "Alcohol use", "Housing instability".</span></label>
         <label class="span-all" for="behavioral_definition">How it shows up for this client ${ta("behavioral_definition", v.behavioral_definition, 3)}
           <span class="hint">Frequency, duration and functional impact, e.g. "Low mood most days for 3 months; missed 4 work days last month."</span></label>
-        <label for="icd10_code">Linked diagnosis ${select("icd10_code", [{ value: "", label: dx.length ? "None" : "No diagnoses in snapshot" },
+        <label for="icd10_code">Linked diagnosis${dx.length ? "" : html` <span class="hint">Add diagnoses on the plan first</span>`} ${select("icd10_code", [{ value: "", label: dx.length ? "Choose a diagnosis…" : "No diagnoses on this plan" },
           ...dx.map((d) => ({ value: d.code, label: `${d.code} ${d.description}` }))], v.icd10_code)}</label>
         <label for="priority">Priority ${select("priority", [{ value: "", label: "Not set" }, ...PRIORITIES], v.priority)}</label>
         <label for="status">Status ${select("status", PROBLEM_STATUSES, v.status || "active")}</label>
