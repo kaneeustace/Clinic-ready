@@ -2,7 +2,11 @@
 const crypto = require("node:crypto");
 const express = require("express");
 const { audit } = require("./audit");
-const { html, page, csrfField } = require("./views");
+const { html, raw, page, csrfField } = require("./views");
+const totp = require("./totp");
+const { encryptField, decryptField, hasDataKey, isEncrypted, warnIfNoDataKey } = require("./crypto-field");
+
+warnIfNoDataKey();
 
 const { ROLE_PERMS, ROLES, can } = require("./permissions");
 
@@ -42,6 +46,11 @@ const IDLE_MINUTES = Number(process.env.EHR_IDLE_MINUTES || 30);
 const ABSOLUTE_HOURS = 12;
 const MAX_FAILED = 5;
 const LOCK_MINUTES = 15;
+const PENDING_MINUTES = 10; // a password-only (second factor pending) session must finish quickly
+// sessions.mfa_pending values
+const MFA_CHALLENGE = 1;    // password accepted, waiting for a TOTP / recovery code
+const MFA_ENROLL = 2;       // password accepted, EHR_REQUIRE_MFA=1 and the user must set up 2FA first
+const mfaRequired = () => process.env.EHR_REQUIRE_MFA === "1";
 
 const sha256 = (s) => crypto.createHash("sha256").update(s).digest("hex");
 const isoNow = (offsetMs = 0) => new Date(Date.now() + offsetMs).toISOString().replace("T", " ").slice(0, 19);
@@ -60,12 +69,15 @@ function cookieAttrs(req) {
   return `Path=/; HttpOnly; SameSite=Strict${secure ? "; Secure" : ""}`;
 }
 
-function createSession(req, res, userId) {
+/** Issue a new session (new random id). `pending` = sessions.mfa_pending. Returns the session row. */
+function createSession(req, res, userId, { pending = 0 } = {}) {
   const token = crypto.randomBytes(32).toString("base64url");
   const csrf = crypto.randomBytes(24).toString("base64url");
-  req.db.prepare("INSERT INTO sessions (id, user_id, csrf_token, expires_at) VALUES (?, ?, ?, ?)")
-    .run(sha256(token), userId, csrf, isoNow(ABSOLUTE_HOURS * 3600e3));
-  res.append("Set-Cookie", `${COOKIE}=${token}; ${cookieAttrs(req)}; Max-Age=${ABSOLUTE_HOURS * 3600}`);
+  const ttl = pending ? PENDING_MINUTES * 60 : ABSOLUTE_HOURS * 3600;
+  req.db.prepare("INSERT INTO sessions (id, user_id, csrf_token, expires_at, mfa_pending) VALUES (?, ?, ?, ?, ?)")
+    .run(sha256(token), userId, csrf, isoNow(ttl * 1000), pending);
+  res.append("Set-Cookie", `${COOKIE}=${token}; ${cookieAttrs(req)}; Max-Age=${ttl}`);
+  return req.db.prepare("SELECT * FROM sessions WHERE id = ?").get(sha256(token));
 }
 
 function destroySession(req, res) {
@@ -87,7 +99,9 @@ function sessionMiddleware(req, res, next) {
       const user = req.db.prepare("SELECT id, email, name, credentials, role, npi, active FROM users WHERE id = ?").get(row.user_id);
       if (user && user.active === 1) {
         req.session = row;
-        req.user = user;
+        // A session whose second factor is still pending is NOT authenticated: req.user stays null.
+        if (row.mfa_pending) req.pendingUser = user;
+        else req.user = user;
         req.db.prepare("UPDATE sessions SET last_seen_at = datetime('now') WHERE id = ?").run(id);
       }
     } else if (row) {
@@ -110,6 +124,17 @@ function sessionMiddleware(req, res, next) {
     req.db.prepare("UPDATE sessions SET flash = NULL WHERE id = ?").run(req.session.id);
     return list;
   };
+  // Password-only sessions may reach only the second-factor page (or enrollment) and sign-out.
+  if (req.session && req.session.mfa_pending) {
+    const target = req.session.mfa_pending === MFA_ENROLL ? "/login/mfa/setup" : "/login/mfa";
+    if (req.path !== target && req.path !== "/logout") {
+      if (["GET", "HEAD"].includes(req.method)) return res.redirect("/ehr" + target);
+      return res.status(403).send(page(req, { title: "Finish signing in", bare: true, body: html`
+        <div class="login"><div class="card login__card"><h1>Finish signing in</h1>
+        <p>Two-factor verification is required before you can continue.</p>
+        <p><a class="btn btn--primary" href="/ehr${target}">Continue</a></p></div></div>` }));
+    }
+  }
   next();
 }
 
@@ -246,7 +271,7 @@ router.post("/setup", (req, res) => {
   req.db.exec("BEGIN IMMEDIATE");
   try {
     if (!noUsers(req.db)) { req.db.exec("ROLLBACK"); return res.redirect("/ehr/login"); }
-    userId = Number(req.db.prepare("INSERT INTO users (email, name, role, password_hash, last_login_at) VALUES (?, ?, 'admin', ?, datetime('now'))")
+    userId = Number(req.db.prepare("INSERT INTO users (email, name, role, password_hash, last_login_at, password_changed_at) VALUES (?, ?, 'admin', ?, datetime('now'), datetime('now'))")
       .run(values.email, values.name, hashPassword(password)).lastInsertRowid);
     req.db.exec("COMMIT");
   } catch (e) {
@@ -255,6 +280,10 @@ router.post("/setup", (req, res) => {
   }
   req.user = { id: userId };
   audit(req, "setup_admin_created", "user", userId);
+  if (mfaRequired()) {
+    createSession(req, res, userId, { pending: MFA_ENROLL });
+    return res.redirect("/ehr/login/mfa/setup");
+  }
   createSession(req, res, userId);
   res.redirect("/ehr");
 });
@@ -286,12 +315,295 @@ router.post("/login", (req, res) => {
     audit(req, "login_failed", "user", user ? user.id : null, null, email);
     return res.status(401).send(loginPage(req, { error: generic, email }));
   }
+  // Remove any stale session for this browser, then issue a fresh one (prevents fixation).
+  if (req.session) req.db.prepare("DELETE FROM sessions WHERE id = ?").run(req.session.id);
+  if (user.mfa_enabled === 1) {
+    // Second factor still needed. The failed-attempt counter is deliberately NOT reset here, so
+    // re-entering the password can't be used to get unlimited guesses at the code.
+    createSession(req, res, user.id, { pending: MFA_CHALLENGE });
+    auditAs(req, user, "login_password_ok", "user", user.id, null, "mfa_challenge");
+    return res.redirect("/ehr/login/mfa" + (next !== "/ehr" ? `?next=${encodeURIComponent(next)}` : ""));
+  }
   req.db.prepare("UPDATE users SET failed_logins = 0, locked_until = NULL, last_login_at = datetime('now') WHERE id = ?").run(user.id);
-  // Remove any stale sessions for this browser, then issue a fresh one (prevents fixation).
+  if (mfaRequired()) {
+    createSession(req, res, user.id, { pending: MFA_ENROLL });
+    auditAs(req, user, "login_password_ok", "user", user.id, null, "mfa_enrollment_required");
+    return res.redirect("/ehr/login/mfa/setup");
+  }
   createSession(req, res, user.id);
   req.user = user;
   audit(req, "login", "user", user.id);
   res.redirect(next);
+});
+
+/* ------------------------------------------------------------------ */
+/* Two-factor sign-in (TOTP, RFC 6238)                                */
+/* ------------------------------------------------------------------ */
+const SECRET_AAD = "users.mfa_secret";
+const RECOVERY_COUNT = 10;
+const RECOVERY_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"; // no 0/o, 1/l/i
+
+/** Audit on behalf of a user who is not (yet) req.user, e.g. during the second-factor step. */
+function auditAs(req, user, ...args) {
+  const prev = req.user;
+  req.user = user;
+  try { audit(req, ...args); } finally { req.user = prev; }
+}
+
+const normRecovery = (c) => String(c || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+
+/**
+ * users.mfa_recovery holds JSON {codes: [sha256 of unused recovery codes], lastStep: n}.
+ * lastStep is the last TOTP time step accepted, so a code can't be replayed inside its window.
+ * (A bare JSON array, the original format, is read as {codes: array}.)
+ */
+function readMfaState(row) {
+  let v = null;
+  try { v = JSON.parse((row && row.mfa_recovery) || "null"); } catch { v = null; }
+  if (Array.isArray(v)) return { codes: v, lastStep: -1 };
+  return { codes: (v && Array.isArray(v.codes)) ? v.codes : [], lastStep: (v && Number.isInteger(v.lastStep)) ? v.lastStep : -1 };
+}
+function writeMfaState(db, userId, state) {
+  db.prepare("UPDATE users SET mfa_recovery = ? WHERE id = ?").run(JSON.stringify({ codes: state.codes, lastStep: state.lastStep }), userId);
+}
+
+/** Decrypted base32 secret (or null). */
+function mfaSecretOf(row) {
+  return row && row.mfa_secret ? decryptField(row.mfa_secret, SECRET_AAD) : null;
+}
+function storeMfaSecret(db, userId, secret) {
+  db.prepare("UPDATE users SET mfa_secret = ? WHERE id = ?").run(secret == null ? null : encryptField(secret, SECRET_AAD), userId);
+}
+
+/** Start (or restart) enrollment: new secret, not yet enabled. Returns the base32 secret. */
+function beginMfaEnrollment(db, userId) {
+  const secret = totp.generateSecret();
+  db.prepare("UPDATE users SET mfa_enabled = 0, mfa_recovery = NULL, mfa_enrolled_at = NULL WHERE id = ?").run(userId);
+  storeMfaSecret(db, userId, secret);
+  return secret;
+}
+
+function newRecoveryCodes() {
+  const plain = [];
+  for (let i = 0; i < RECOVERY_COUNT; i++) {
+    let c = "";
+    for (let j = 0; j < 10; j++) c += RECOVERY_ALPHABET[crypto.randomInt(RECOVERY_ALPHABET.length)];
+    plain.push(`${c.slice(0, 5)}-${c.slice(5)}`);
+  }
+  return { plain, hashes: plain.map((c) => sha256(normRecovery(c))) };
+}
+
+/** Replace recovery codes; returns the plaintext codes (show once, never stored). */
+function regenerateRecoveryCodes(db, userId) {
+  const row = db.prepare("SELECT mfa_recovery FROM users WHERE id = ?").get(userId);
+  const state = readMfaState(row);
+  const { plain, hashes } = newRecoveryCodes();
+  writeMfaState(db, userId, { codes: hashes, lastStep: state.lastStep });
+  return plain;
+}
+
+/** Turn MFA on for a user whose secret is stored (or `secret` if given). Returns recovery codes. */
+function enableMfa(db, userId, secret) {
+  if (secret) storeMfaSecret(db, userId, secret);
+  const row = db.prepare("SELECT mfa_recovery FROM users WHERE id = ?").get(userId);
+  const { plain, hashes } = newRecoveryCodes();
+  writeMfaState(db, userId, { codes: hashes, lastStep: readMfaState(row).lastStep });
+  db.prepare("UPDATE users SET mfa_enabled = 1, mfa_enrolled_at = datetime('now') WHERE id = ?").run(userId);
+  return plain;
+}
+
+function clearMfa(db, userId) {
+  db.prepare("UPDATE users SET mfa_secret = NULL, mfa_enabled = 0, mfa_recovery = NULL, mfa_enrolled_at = NULL WHERE id = ?").run(userId);
+}
+
+/** Verify a TOTP code for a user (±1 step, no replay). Records the accepted step. */
+function checkTotp(db, userId, code) {
+  const row = db.prepare("SELECT mfa_secret, mfa_recovery FROM users WHERE id = ?").get(userId);
+  const secret = mfaSecretOf(row);
+  if (!secret) return false;
+  const state = readMfaState(row);
+  const step = totp.verify(secret, code, { afterStep: state.lastStep });
+  if (step === null) return false;
+  writeMfaState(db, userId, { codes: state.codes, lastStep: step });
+  // Rows written before EHR_DATA_KEY was configured get encrypted on first use.
+  if (!isEncrypted(row.mfa_secret) && hasDataKey()) storeMfaSecret(db, userId, secret);
+  return true;
+}
+
+/** Use (and burn) a one-time recovery code. */
+function useRecoveryCode(db, userId, code) {
+  const norm = normRecovery(code);
+  if (norm.length !== 10) return false;
+  const row = db.prepare("SELECT mfa_recovery FROM users WHERE id = ?").get(userId);
+  const state = readMfaState(row);
+  const h = Buffer.from(sha256(norm));
+  const idx = state.codes.findIndex((c) => c.length === h.length && crypto.timingSafeEqual(Buffer.from(c), h));
+  if (idx < 0) return false;
+  state.codes.splice(idx, 1);
+  writeMfaState(db, userId, state);
+  return true;
+}
+
+const recoveryRemaining = (row) => readMfaState(row).codes.length;
+
+/** Test helper: forget the last accepted TOTP step so a test can sign in twice within 30 seconds. */
+function forgetMfaStep(db, userId) {
+  const row = db.prepare("SELECT mfa_recovery FROM users WHERE id = ?").get(userId);
+  if (row && row.mfa_recovery) writeMfaState(db, userId, { codes: readMfaState(row).codes, lastStep: -1 });
+}
+
+/** QR code + manual key + confirmation form. `withPassword` adds a current-password field. */
+function mfaEnrollmentPanel(req, { email, secret, action, errors = [], withPassword = false, cancelHref = null }) {
+  const uri = totp.otpauthUri(secret, email);
+  let qr = "";
+  try { qr = totp.qrSvg(uri, { scale: 4, title: "QR code for your authenticator app" }); } catch { qr = ""; }
+  return html`
+    <section class="card stack">
+      <h2>Set up two-factor sign-in</h2>
+      <ol class="stack">
+        <li>Install an authenticator app on your phone (for example Microsoft Authenticator, Google Authenticator, 1Password or Authy).</li>
+        <li>Scan this QR code with the app${qr ? "" : " (QR unavailable: use the key below)"}, or choose “enter a setup key” and type the key below.</li>
+      </ol>
+      ${qr ? html`<div class="mfa-qr" style="background:#fff;padding:8px;display:inline-block;align-self:flex-start">${raw(qr)}</div>` : ""}
+      <p><strong>Setup key</strong> <span class="hint">time-based, 6 digits, 30 seconds</span><br>
+        <code class="mfa-key" style="font-size:1.1em;letter-spacing:.05em">${totp.groupSecret(secret)}</code></p>
+      <details><summary class="small">Show setup link</summary><p class="small" style="word-break:break-all"><code>${uri}</code></p></details>
+      ${errors.length ? html`<div class="alert alert--error" role="alert"><ul class="list-plain">${errors.map((e) => html`<li>${e}</li>`)}</ul></div>` : ""}
+      <form method="post" action="${action}" class="stack">
+        ${csrfField(req)}
+        <label>6-digit code from the app <input name="code" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,7}" maxlength="7" required></label>
+        ${withPassword ? html`<label>Current password <input type="password" name="password" autocomplete="current-password" required></label>` : ""}
+        <div class="form-actions"><button class="btn btn--primary" type="submit">Turn on two-factor sign-in</button>
+          ${cancelHref ? html`<a class="btn btn--ghost" href="${cancelHref}">Cancel</a>` : ""}</div>
+      </form>
+    </section>`;
+}
+
+/** One-time display of recovery codes. */
+function recoveryCodesPanel(codes, continueHref) {
+  return html`
+    <section class="card stack">
+      <h2>Save your recovery codes</h2>
+      <p class="alert alert--warn" role="status"><strong>These codes are shown only once.</strong> Store them somewhere safe (a password manager or a printed copy kept securely).
+        Each code works one time if you lose access to your authenticator app.</p>
+      <ul class="list-plain mfa-codes" style="columns:2;font-family:monospace;font-size:1.1em">${codes.map((c) => html`<li>${c}</li>`)}</ul>
+      <p><a class="btn btn--primary" href="${continueHref}">I've saved these codes, continue</a></p>
+    </section>`;
+}
+
+function mfaPage(req, { error, next = "/ehr" } = {}) {
+  return page(req, {
+    title: "Two-factor verification",
+    bare: true,
+    body: html`
+      <div class="login">
+        <div class="card login__card">
+          <div class="login__brand"><span class="logo-dot" aria-hidden="true"></span> Clinic Ready <strong>EHR</strong></div>
+          <h1>Two-factor verification</h1>
+          <p class="muted">Enter the 6-digit code from your authenticator app.</p>
+          ${error ? html`<p class="alert alert--error" role="alert">${error}</p>` : ""}
+          <form method="post" action="/ehr/login/mfa" class="stack">
+            ${csrfField(req)}
+            <input type="hidden" name="next" value="${next}">
+            <label>Code <input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="20" required autofocus>
+              <span class="hint">Lost your phone? Enter one of your recovery codes instead (format xxxxx-xxxxx).</span></label>
+            <button class="btn btn--primary" type="submit">Verify</button>
+          </form>
+          <form method="post" action="/ehr/logout">${csrfField(req)}<button class="btn btn--ghost btn--sm" type="submit">Cancel and sign out</button></form>
+        </div>
+      </div>`,
+  });
+}
+
+const safeNext = (v) => (typeof v === "string" && v.startsWith("/ehr") && !v.startsWith("//") ? v : "/ehr");
+
+/** Replace the pending session with a fully authenticated one (new id: no fixation). */
+function completeSignIn(req, res, user) {
+  req.db.prepare("DELETE FROM sessions WHERE id = ?").run(req.session.id);
+  req.db.prepare("UPDATE users SET failed_logins = 0, locked_until = NULL, last_login_at = datetime('now') WHERE id = ?").run(user.id);
+  req.session = createSession(req, res, user.id);
+  req.user = user;
+  req.pendingUser = null;
+}
+
+router.get("/login/mfa", (req, res) => {
+  if (!req.pendingUser) return res.redirect(req.user ? "/ehr" : "/ehr/login");
+  res.send(mfaPage(req, { next: safeNext(req.query.next) }));
+});
+
+router.post("/login/mfa", (req, res) => {
+  if (!req.pendingUser) return res.redirect(req.user ? "/ehr" : "/ehr/login");
+  const user = req.db.prepare("SELECT * FROM users WHERE id = ?").get(req.session.user_id);
+  const next = safeNext(req.body.next);
+  if (user.locked_until && user.locked_until > isoNow()) {
+    destroySession(req, res);
+    auditAs(req, user, "login_locked", "user", user.id, null, "mfa");
+    return res.status(429).send(loginPage(req, { error: "Too many failed attempts. Try again in a few minutes.", email: user.email }));
+  }
+  const code = String(req.body.code || "").trim();
+  let method = null;
+  if (/^\d{3} ?\d{3}$/.test(code)) { if (checkTotp(req.db, user.id, code)) method = "totp"; }
+  else if (useRecoveryCode(req.db, user.id, code)) method = "recovery_code";
+
+  if (!method) {
+    const failed = user.failed_logins + 1;
+    const lock = failed >= MAX_FAILED ? isoNow(LOCK_MINUTES * 60e3) : null;
+    req.db.prepare("UPDATE users SET failed_logins = ?, locked_until = ? WHERE id = ?").run(lock ? 0 : failed, lock, user.id);
+    auditAs(req, user, "mfa_failed", "user", user.id, null, lock ? "locked" : `attempt=${failed}`);
+    if (lock) {
+      destroySession(req, res);
+      return res.status(429).send(loginPage(req, { error: "Too many failed attempts. Try again in a few minutes.", email: user.email }));
+    }
+    return res.status(401).send(mfaPage(req, { error: "That code didn't work. Check the time on your phone and try again.", next }));
+  }
+  completeSignIn(req, res, user);
+  if (method === "recovery_code") {
+    audit(req, "mfa_recovery_used", "user", user.id, null, `remaining=${recoveryRemaining(req.db.prepare("SELECT mfa_recovery FROM users WHERE id = ?").get(user.id))}`);
+  }
+  audit(req, "mfa_success", "user", user.id, null, method);
+  audit(req, "login", "user", user.id, null, "mfa");
+  if (method === "recovery_code") req.flash("info", "You signed in with a recovery code; it can't be used again. Generate new codes from My account if you're running low.");
+  res.redirect(next);
+});
+
+/* Forced enrollment (EHR_REQUIRE_MFA=1): session limited to this page and sign-out until done. */
+function forcedEnrollPage(req, user, errors = []) {
+  let secret = mfaSecretOf(user);
+  if (!secret || user.mfa_enabled === 1) secret = beginMfaEnrollment(req.db, user.id);
+  return page(req, {
+    title: "Set up two-factor sign-in",
+    bare: true,
+    body: html`
+      <div class="login"><div class="login__card" style="max-width:40rem">
+        <div class="login__brand"><span class="logo-dot" aria-hidden="true"></span> Clinic Ready <strong>EHR</strong></div>
+        <p class="alert alert--info" role="status">Your organization requires two-factor sign-in. Set it up to continue.</p>
+        ${mfaEnrollmentPanel(req, { email: user.email, secret, action: "/ehr/login/mfa/setup", errors })}
+        <form method="post" action="/ehr/logout">${csrfField(req)}<button class="btn btn--ghost btn--sm" type="submit">Cancel and sign out</button></form>
+      </div></div>`,
+  });
+}
+
+router.get("/login/mfa/setup", (req, res) => {
+  if (!req.pendingUser || req.session.mfa_pending !== MFA_ENROLL) return res.redirect(req.user ? "/ehr" : "/ehr/login");
+  const user = req.db.prepare("SELECT * FROM users WHERE id = ?").get(req.session.user_id);
+  res.send(forcedEnrollPage(req, user));
+});
+
+router.post("/login/mfa/setup", (req, res) => {
+  if (!req.pendingUser || req.session.mfa_pending !== MFA_ENROLL) return res.redirect(req.user ? "/ehr" : "/ehr/login");
+  const user = req.db.prepare("SELECT * FROM users WHERE id = ?").get(req.session.user_id);
+  if (user.mfa_enabled === 1 || !user.mfa_secret || !checkTotp(req.db, user.id, req.body.code)) {
+    auditAs(req, user, "mfa_enroll_failed", "user", user.id);
+    return res.status(400).send(forcedEnrollPage(req, req.db.prepare("SELECT * FROM users WHERE id = ?").get(user.id),
+      ["That code didn't match. Make sure the app shows Clinic Ready EHR and try the newest code."]));
+  }
+  const codes = enableMfa(req.db, user.id);
+  completeSignIn(req, res, user);
+  audit(req, "mfa_enrolled", "user", user.id);
+  audit(req, "login", "user", user.id, null, "mfa_enrolled");
+  res.send(page(req, { title: "Recovery codes", body: html`
+    <div class="page-head"><h1>Two-factor sign-in is on</h1></div>
+    ${recoveryCodesPanel(codes, "/ehr")}` }));
 });
 
 router.post("/logout", (req, res) => {
@@ -300,7 +612,13 @@ router.post("/logout", (req, res) => {
   res.redirect("/ehr/login");
 });
 
+const mfa = {
+  required: mfaRequired, readState: readMfaState, secretOf: mfaSecretOf, beginEnrollment: beginMfaEnrollment,
+  enable: enableMfa, clear: clearMfa, checkTotp, useRecoveryCode, regenerateRecoveryCodes, recoveryRemaining,
+  enrollmentPanel: mfaEnrollmentPanel, recoveryCodesPanel, forgetStep: forgetMfaStep,
+};
+
 module.exports = {
   router, sessionMiddleware, csrfProtection, requireAuth, requirePerm, forbidden, can,
-  hashPassword, verifyPassword, passwordPolicyError, ROLES, ROLE_PERMS, csrfField,
+  hashPassword, verifyPassword, passwordPolicyError, ROLES, ROLE_PERMS, csrfField, mfa,
 };

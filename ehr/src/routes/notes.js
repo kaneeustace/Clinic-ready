@@ -917,7 +917,13 @@ router.get("/patients/:id/notes/new", requirePerm("clinical:write"), (req, res) 
   const { appt, error } = loadAppointment(req, patient.id, req.query.appointment_id);
   if (error) { req.flash("error", error); return res.redirect(`/ehr/patients/${patient.id}/notes`); }
   let type = String(req.query.type || "");
-  if (!TYPES[type]) type = (appt && APPT_DEFAULT_TYPE[appt.type]) || "progress";
+  const explicit = Boolean(TYPES[type]);
+  if (!explicit) type = (appt && APPT_DEFAULT_TYPE[appt.type]) || "progress";
+  // No type chosen and no plan yet: start with the intake assessment the plan will be built from.
+  if (!explicit && planRequiredFor(req.db, type, patient.id)) {
+    type = "intake";
+    req.flash("info", "No active treatment plan yet, so this starts an intake assessment. Progress notes open once the plan is signed.");
+  }
   if (planRequiredFor(req.db, type, patient.id)) return planRequiredPage(req, res, patient, type);
   let format = String(req.query.format || "");
   if (!formatsFor(type).includes(format)) format = formatsFor(type)[0];

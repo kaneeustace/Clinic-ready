@@ -129,6 +129,10 @@ test("without an active plan: progress and group notes are blocked, intake is al
   const tab = await c.get(`/ehr/patients/${noPlanPid}/notes`);
   assert.match(tab.text, /A signed, active treatment plan is required/);
   assert.doesNotMatch(tab.text, /notes\/new\?type=progress"/);
+  // "New note" without a type falls back to an intake assessment instead of the block page.
+  const generic = await c.get(`/ehr/patients/${noPlanPid}/notes/new`);
+  assert.equal(generic.status, 200);
+  assert.match(generic.text, /Presenting problem/);
   // Intake is still allowed (the plan is built from it).
   assert.equal((await c.get(`/ehr/patients/${noPlanPid}/notes/new?type=intake`)).status, 200);
 });

@@ -5,7 +5,7 @@
  *   /account...        own profile and password change (any logged-in user)
  */
 const express = require("express");
-const { requirePerm, hashPassword, verifyPassword, passwordPolicyError, ROLES } = require("../auth");
+const { requirePerm, hashPassword, verifyPassword, passwordPolicyError, ROLES, mfa } = require("../auth");
 const { audit } = require("../audit");
 const { html, page, csrfField, select, badge, humanize, fmtTimestamp, patientName, getPatient, notFound } = require("../views");
 
@@ -37,7 +37,19 @@ function isLocked(u) {
 }
 
 const USER_COLS = `id, email, name, credentials, role, npi, active, failed_logins, locked_until, last_login_at, created_at,
+  mfa_enabled, mfa_enrolled_at, mfa_recovery, password_changed_at, (mfa_secret IS NOT NULL) AS mfa_started,
   (locked_until IS NOT NULL AND locked_until > datetime('now')) AS is_locked`;
+
+function mfaBadge(u) {
+  if (u.mfa_enabled === 1) return badge("active", "On");
+  return u.mfa_started ? badge("draft", "Setup not finished") : badge("inactive", "Off");
+}
+
+/** The signed-in user's own password check (for confirmations). */
+function ownPasswordOk(req, password) {
+  const row = req.db.prepare("SELECT password_hash FROM users WHERE id = ?").get(req.user.id);
+  return typeof password === "string" && password.length > 0 && verifyPassword(password, row.password_hash);
+}
 
 /** Escape one CSV cell, neutralising spreadsheet formula injection. */
 function csvCell(v) {
@@ -112,7 +124,7 @@ router.get("/admin/users", adminOnly, (req, res) => {
       <div class="page-head row"><h1>Users</h1><span class="spacer"></span><a class="btn btn--primary" href="/ehr/admin/users/new">Add user</a></div>
       <section class="card table-wrap">
         <table class="table">
-          <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Credentials</th><th>NPI</th><th>Status</th><th>Last sign-in</th><th></th></tr></thead>
+          <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Credentials</th><th>NPI</th><th>Status</th><th>Two-factor</th><th>Last sign-in</th><th></th></tr></thead>
           <tbody>${users.map((u) => html`
             <tr>
               <td>${u.name}</td>
@@ -121,6 +133,7 @@ router.get("/admin/users", adminOnly, (req, res) => {
               <td>${u.credentials || ""}</td>
               <td>${u.npi || ""}</td>
               <td>${badge(u.active === 1 ? "active" : "inactive")} ${isLocked(u) ? badge("high", "Locked") : ""}</td>
+              <td>${mfaBadge(u)}</td>
               <td>${u.last_login_at ? fmtTimestamp(u.last_login_at) : html`<span class="muted">Never</span>`}</td>
               <td><a class="btn btn--sm" href="/ehr/admin/users/${u.id}/edit">Edit</a></td>
             </tr>`)}</tbody>
@@ -173,7 +186,7 @@ router.post("/admin/users", adminOnly, (req, res) => {
   if (errors.length) return res.status(400).send(newUserForm(req, v, errors));
 
   const id = Number(req.db.prepare(
-    "INSERT INTO users (email, name, role, credentials, npi, password_hash) VALUES (?, ?, ?, ?, ?, ?)"
+    "INSERT INTO users (email, name, role, credentials, npi, password_hash, password_changed_at) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))"
   ).run(v.email, v.name, v.role, v.credentials || null, v.npi || null, hashPassword(password)).lastInsertRowid);
   audit(req, "create", "user", id, null, `role=${v.role}`);
   req.flash("success", `User ${v.name} created.`);
@@ -218,6 +231,18 @@ function editUserForm(req, user, v = user, errors = []) {
               ? html`<p>${badge("high", "Locked")} until ${fmtTimestamp(user.locked_until)} after repeated failed sign-ins.</p>
                 <form method="post" action="/ehr/admin/users/${user.id}/unlock">${csrfField(req)}<button class="btn" type="submit">Unlock account</button></form>`
               : html`<p class="muted">Not locked. Failed attempts since last success: ${user.failed_logins}.</p>`}
+          </section>
+          <section class="card">
+            <h2>Two-factor sign-in</h2>
+            <p>${mfaBadge(user)}${user.mfa_enabled === 1 && user.mfa_enrolled_at ? html` <span class="muted">since ${fmtTimestamp(user.mfa_enrolled_at)} · ${mfa.recoveryRemaining(user)} recovery codes left</span>` : ""}</p>
+            ${user.mfa_enabled === 1 || user.mfa_started ? html`
+              <form method="post" action="/ehr/admin/users/${user.id}/reset-mfa" class="stack">
+                ${csrfField(req)}
+                <p class="muted small">Use when the user lost their phone and recovery codes. Clears their authenticator and recovery codes and signs them out everywhere; they set it up again at next sign-in${mfa.required() ? "" : " (or from My account)"}. Verify their identity first.</p>
+                <label>Your password (to confirm) <input type="password" name="admin_password" required autocomplete="current-password"></label>
+                <div class="form-actions"><button class="btn btn--danger" type="submit">Reset two-factor</button></div>
+              </form>`
+              : html`<p class="muted small">${mfa.required() ? "Required for all staff: they'll be asked to set it up at next sign-in." : "The user can turn it on from My account."}</p>`}
           </section>
         </div>
       </div>`,
@@ -273,7 +298,7 @@ router.post("/admin/users/:id/reset-password", adminOnly, (req, res) => {
   const password = typeof req.body.password === "string" ? req.body.password : "";
   const err = passwordPolicyError(password);
   if (err) return res.status(400).send(editUserForm(req, user, user, [err]));
-  req.db.prepare("UPDATE users SET password_hash = ?, failed_logins = 0, locked_until = NULL WHERE id = ?").run(hashPassword(password), user.id);
+  req.db.prepare("UPDATE users SET password_hash = ?, failed_logins = 0, locked_until = NULL, password_changed_at = datetime('now') WHERE id = ?").run(hashPassword(password), user.id);
   const n = req.db.prepare("DELETE FROM sessions WHERE user_id = ?").run(user.id).changes;
   audit(req, "password_reset", "user", user.id, null, `sessions_revoked=${n}`);
   if (user.id === req.user.id) return res.redirect("/ehr/login"); // own session is gone
@@ -287,6 +312,21 @@ router.post("/admin/users/:id/unlock", adminOnly, (req, res) => {
   req.db.prepare("UPDATE users SET failed_logins = 0, locked_until = NULL WHERE id = ?").run(user.id);
   audit(req, "unlock", "user", user.id);
   req.flash("success", `${user.name} unlocked.`);
+  res.redirect(`/ehr/admin/users/${user.id}/edit`);
+});
+
+router.post("/admin/users/:id/reset-mfa", adminOnly, (req, res) => {
+  const user = loadUserWithLock(req, req.params.id);
+  if (!user) return notFound(req, res, "User");
+  if (!ownPasswordOk(req, req.body.admin_password)) {
+    audit(req, "mfa_reset_failed", "user", user.id, null, "wrong admin password");
+    return res.status(400).send(editUserForm(req, user, user, ["Your password was incorrect; two-factor was not reset."]));
+  }
+  mfa.clear(req.db, user.id);
+  const n = req.db.prepare("DELETE FROM sessions WHERE user_id = ?").run(user.id).changes;
+  audit(req, "mfa_reset", "user", user.id, null, `sessions_revoked=${n}`);
+  if (user.id === req.user.id) return res.redirect("/ehr/login"); // own session is gone
+  req.flash("success", `Two-factor sign-in reset for ${user.name}. They have been signed out everywhere.`);
   res.redirect(`/ehr/admin/users/${user.id}/edit`);
 });
 
@@ -444,7 +484,51 @@ router.get("/admin/patients/:id/access-report", adminOnly, (req, res) => {
 /* ------------------------------------------------------------------ */
 /* My account (any logged-in user)                                    */
 /* ------------------------------------------------------------------ */
-function accountPage(req, errors = []) {
+function mfaAccountCard(req, u, mfaErrors = []) {
+  const errs = mfaErrors.length ? errorList(mfaErrors) : "";
+  if (u.mfa_enabled !== 1) {
+    return html`
+      <section class="card stack" id="two-factor">
+        <h2>Two-factor sign-in</h2>
+        ${errs}
+        <p>${mfaBadge(u)} Protect your account with a code from an authenticator app on your phone, in addition to your password.</p>
+        <form method="post" action="/ehr/account/mfa/start">${csrfField(req)}
+          <button class="btn btn--primary" type="submit">${u.mfa_started ? "Restart two-factor setup" : "Set up two-factor sign-in"}</button></form>
+        ${u.mfa_started ? html`<p class="small"><a href="/ehr/account/mfa/setup">Continue the setup you started</a></p>` : ""}
+      </section>`;
+  }
+  const remaining = mfa.recoveryRemaining(u);
+  return html`
+    <section class="card stack" id="two-factor">
+      <h2>Two-factor sign-in</h2>
+      ${errs}
+      <p>${mfaBadge(u)} ${u.mfa_enrolled_at ? html`<span class="muted">since ${fmtTimestamp(u.mfa_enrolled_at)}</span>` : ""}</p>
+      <p class="${remaining <= 3 ? "alert alert--warn" : "muted"}">${remaining} unused recovery code${remaining === 1 ? "" : "s"} left.</p>
+      <form method="post" action="/ehr/account/mfa/recovery-codes" class="stack">
+        ${csrfField(req)}
+        <h3>New recovery codes</h3>
+        <p class="hint">Replaces all of your existing recovery codes.</p>
+        <div class="form-grid">
+          <label>Current password <input type="password" name="password" required autocomplete="current-password"></label>
+          <label>Code from your app <input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="7" required></label>
+        </div>
+        <div class="form-actions"><button class="btn" type="submit">Generate new recovery codes</button></div>
+      </form>
+      ${mfa.required()
+        ? html`<p class="hint">Two-factor sign-in is required by your organization and can't be turned off.</p>`
+        : html`<form method="post" action="/ehr/account/mfa/disable" class="stack">
+          ${csrfField(req)}
+          <h3>Turn off two-factor sign-in</h3>
+          <div class="form-grid">
+            <label>Current password <input type="password" name="password" required autocomplete="current-password"></label>
+            <label>Code from your app <input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="7" required></label>
+          </div>
+          <div class="form-actions"><button class="btn btn--danger" type="submit">Turn off</button></div>
+        </form>`}
+    </section>`;
+}
+
+function accountPage(req, errors = [], mfaErrors = []) {
   const u = req.db.prepare(`SELECT ${USER_COLS} FROM users WHERE id = ?`).get(req.user.id);
   return page(req, {
     title: "My account",
@@ -475,6 +559,7 @@ function accountPage(req, errors = []) {
           <p class="hint">Changing your password signs you out on all other devices.</p>
           <div class="form-actions"><button class="btn btn--primary" type="submit">Change password</button></div>
         </form>
+        ${mfaAccountCard(req, u, mfaErrors)}
       </div>`,
   });
 }
@@ -498,11 +583,94 @@ router.post("/account/password", (req, res) => {
   }
   if (errors.length) return res.status(400).send(accountPage(req, errors));
 
-  req.db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(hashPassword(next), req.user.id);
+  req.db.prepare("UPDATE users SET password_hash = ?, password_changed_at = datetime('now') WHERE id = ?").run(hashPassword(next), req.user.id);
   const n = req.db.prepare("DELETE FROM sessions WHERE user_id = ? AND id != ?").run(req.user.id, req.session.id).changes;
   audit(req, "password_change", "user", req.user.id, null, `other_sessions_revoked=${n}`);
   req.flash("success", "Password changed.");
   res.redirect("/ehr/account");
+});
+
+/* ---------- Two-factor sign-in (own account) ---------- */
+const fullUser = (req) => req.db.prepare("SELECT * FROM users WHERE id = ?").get(req.user.id);
+
+function setupPage(req, errors = []) {
+  const u = fullUser(req);
+  return page(req, {
+    title: "Set up two-factor sign-in",
+    active: "account",
+    body: html`
+      <div class="page-head"><h1>Two-factor sign-in</h1><p><a href="/ehr/account">Back to my account</a></p></div>
+      ${mfa.enrollmentPanel(req, { email: u.email, secret: mfa.secretOf(u), action: "/ehr/account/mfa/confirm", errors, withPassword: true, cancelHref: "/ehr/account" })}`,
+  });
+}
+
+router.post("/account/mfa/start", (req, res) => {
+  const u = fullUser(req);
+  if (u.mfa_enabled === 1) return res.redirect("/ehr/account");
+  mfa.beginEnrollment(req.db, u.id);
+  audit(req, "mfa_enroll_started", "user", u.id);
+  res.redirect("/ehr/account/mfa/setup");
+});
+
+router.get("/account/mfa/setup", (req, res) => {
+  const u = fullUser(req);
+  if (u.mfa_enabled === 1 || !u.mfa_secret) return res.redirect("/ehr/account");
+  res.send(setupPage(req));
+});
+
+router.post("/account/mfa/confirm", (req, res) => {
+  const u = fullUser(req);
+  if (u.mfa_enabled === 1 || !u.mfa_secret) return res.redirect("/ehr/account");
+  const errors = [];
+  if (!ownPasswordOk(req, req.body.password)) errors.push("Current password is incorrect.");
+  else if (!mfa.checkTotp(req.db, u.id, req.body.code)) errors.push("That code didn't match. Make sure the app shows Clinic Ready EHR and try the newest code.");
+  if (errors.length) {
+    audit(req, "mfa_enroll_failed", "user", u.id);
+    return res.status(400).send(setupPage(req, errors));
+  }
+  const codes = mfa.enable(req.db, u.id);
+  const n = req.db.prepare("DELETE FROM sessions WHERE user_id = ? AND id != ?").run(u.id, req.session.id).changes;
+  audit(req, "mfa_enrolled", "user", u.id, null, `other_sessions_revoked=${n}`);
+  res.send(page(req, { title: "Recovery codes", active: "account", body: html`
+    <div class="page-head"><h1>Two-factor sign-in is on</h1></div>
+    ${mfa.recoveryCodesPanel(codes, "/ehr/account")}` }));
+});
+
+/** Password + current TOTP code check for changes to an enabled second factor. */
+function confirmFactor(req, u) {
+  if (!ownPasswordOk(req, req.body.password)) return "Current password is incorrect.";
+  if (!mfa.checkTotp(req.db, u.id, req.body.code)) return "The code from your authenticator app didn't match.";
+  return null;
+}
+
+router.post("/account/mfa/disable", (req, res) => {
+  const u = fullUser(req);
+  if (u.mfa_enabled !== 1) return res.redirect("/ehr/account");
+  if (mfa.required()) return res.status(403).send(accountPage(req, [], ["Two-factor sign-in is required by your organization and can't be turned off."]));
+  const err = confirmFactor(req, u);
+  if (err) {
+    audit(req, "mfa_disable_failed", "user", u.id);
+    return res.status(400).send(accountPage(req, [], [err]));
+  }
+  mfa.clear(req.db, u.id);
+  audit(req, "mfa_disabled", "user", u.id);
+  req.flash("success", "Two-factor sign-in is off.");
+  res.redirect("/ehr/account");
+});
+
+router.post("/account/mfa/recovery-codes", (req, res) => {
+  const u = fullUser(req);
+  if (u.mfa_enabled !== 1) return res.redirect("/ehr/account");
+  const err = confirmFactor(req, u);
+  if (err) {
+    audit(req, "mfa_recovery_regenerate_failed", "user", u.id);
+    return res.status(400).send(accountPage(req, [], [err]));
+  }
+  const codes = mfa.regenerateRecoveryCodes(req.db, u.id);
+  audit(req, "mfa_recovery_regenerated", "user", u.id);
+  res.send(page(req, { title: "Recovery codes", active: "account", body: html`
+    <div class="page-head"><h1>New recovery codes</h1><p class="muted">Your previous recovery codes no longer work.</p></div>
+    ${mfa.recoveryCodesPanel(codes, "/ehr/account")}` }));
 });
 
 module.exports = { router, csvCell };

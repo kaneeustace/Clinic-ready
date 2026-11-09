@@ -7,11 +7,15 @@
  *   const res = await c.get("/ehr/patients");          // { status, text, headers, location }
  *   await c.post("/ehr/patients", { first_name: "A" }); // CSRF token is added automatically
  *   t.db.prepare("SELECT ...").get();         // inspect DB directly
+ *   const secret = t.enableMfa("admin");      // optional: turn on TOTP two-factor for a user
+ *   const c2 = await t.login("admin", { totpSecret: secret }); // completes the second-factor step
  *   await t.stop();
  */
 const { openDb } = require("../src/db");
 const { createApp } = require("../src/app");
 const { seed, USERS } = require("../src/seed");
+const { mfa } = require("../src/auth");
+const totp = require("../src/totp");
 
 async function start() {
   const db = openDb(":memory:");
@@ -63,18 +67,31 @@ async function start() {
     return c;
   }
 
-  async function login(key) {
+  async function login(key, { totpSecret } = {}) {
     const u = USERS.find((x) => x.key === key);
     if (!u) throw new Error("unknown user key " + key);
     const c = client();
     const res = await c.post("/ehr/login", { email: u.email, password: "Test-Password-123!" });
     if (res.status !== 302) throw new Error(`login failed for ${key}: ${res.status}`);
+    if (totpSecret && res.location && res.location.startsWith("/ehr/login/mfa")) {
+      await c.get(res.location); // picks up the pending session's CSRF token
+      mfa.forgetStep(db, ctx.users[key]); // allow repeated sign-ins within one 30-second window
+      const r2 = await c.post("/ehr/login/mfa", { code: totp.generate(totpSecret) });
+      if (r2.status !== 302) throw new Error(`second factor failed for ${key}: ${r2.status}`);
+    }
     await c.refreshCsrf();
     c.userId = ctx.users[key];
     return c;
   }
 
-  return { db, ctx, base, client, login, stop: () => new Promise((r) => server.close(r)) };
+  /** Turn on TOTP two-factor for a seeded user; returns the base32 secret. */
+  function enableMfa(key) {
+    const secret = totp.generateSecret();
+    mfa.enable(db, ctx.users[key], secret);
+    return secret;
+  }
+
+  return { db, ctx, base, client, login, enableMfa, stop: () => new Promise((r) => server.close(r)) };
 }
 
 module.exports = { start };
