@@ -30,6 +30,21 @@ function migrate(db, schema) {
   ];
   // Columns added after first release (ALTER TABLE ADD COLUMN is safe and instant in SQLite).
   const ADD_COLUMNS = {
+    // HIPAA hardening (see docs/hipaa/)
+    users: [
+      ["mfa_secret", "TEXT"],                 // base32 TOTP secret (encrypted at rest when EHR_DATA_KEY is set)
+      ["mfa_enabled", "INTEGER NOT NULL DEFAULT 0"],
+      ["mfa_recovery", "TEXT"],               // JSON array of sha256 hashes of one-time recovery codes
+      ["mfa_enrolled_at", "TEXT"],
+      ["password_changed_at", "TEXT"],
+    ],
+    sessions: [
+      ["mfa_pending", "INTEGER NOT NULL DEFAULT 0"], // password accepted, second factor not yet verified
+    ],
+    audit_log: [
+      ["prev_hash", "TEXT"],                  // tamper-evident hash chain
+      ["hash", "TEXT"],
+    ],
     treatment_plans: [
       ["plan_type", "TEXT NOT NULL DEFAULT 'mental_health'"],   // mental_health | sud | co_occurring
       ["version", "INTEGER NOT NULL DEFAULT 1"],

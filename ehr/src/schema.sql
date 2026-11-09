@@ -377,3 +377,39 @@ CREATE INDEX IF NOT EXISTS idx_plan_goals_problem ON plan_goals(problem_id, sort
 CREATE INDEX IF NOT EXISTS idx_plan_objectives_goal ON plan_objectives(goal_id, sort);
 CREATE INDEX IF NOT EXISTS idx_plan_interventions_obj ON plan_interventions(objective_id, sort);
 CREATE INDEX IF NOT EXISTS idx_note_objectives_obj ON note_objectives(objective_id);
+
+-- ---------------------------------------------------------------------------
+-- HIPAA hardening (see docs/hipaa/). users/sessions/audit_log columns are added in db.js migrate().
+-- ---------------------------------------------------------------------------
+-- Accounting of disclosures (45 CFR 164.528) and release tracking.
+CREATE TABLE IF NOT EXISTS disclosures (
+  id INTEGER PRIMARY KEY,
+  patient_id INTEGER NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
+  disclosed_on TEXT NOT NULL,               -- 'YYYY-MM-DD'
+  recipient TEXT NOT NULL,                  -- name / organization / address
+  purpose TEXT NOT NULL,
+  description TEXT NOT NULL,                -- what information was disclosed
+  basis TEXT NOT NULL CHECK (basis IN ('authorization','patient_request','required_by_law','public_health','health_oversight','judicial','law_enforcement','treatment','payment','operations','other')),
+  authorization_note_id INTEGER REFERENCES notes(id),  -- linked release-of-information consent
+  includes_part2 INTEGER NOT NULL DEFAULT 0,          -- substance use disorder records (42 CFR Part 2)
+  method TEXT,                              -- fax, mail, portal, secure email, in person
+  entered_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_disclosures_patient ON disclosures(patient_id, disclosed_on);
+
+-- Security events surfaced to administrators (failed-login bursts, unusual access, break-glass, etc.).
+CREATE TABLE IF NOT EXISTS security_alerts (
+  id INTEGER PRIMARY KEY,
+  ts TEXT NOT NULL DEFAULT (datetime('now')),
+  kind TEXT NOT NULL,                       -- e.g. 'failed_logins', 'bulk_access', 'after_hours', 'audit_chain_broken', 'backup_failed'
+  severity TEXT NOT NULL DEFAULT 'medium' CHECK (severity IN ('low','medium','high')),
+  user_id INTEGER REFERENCES users(id),
+  patient_id INTEGER REFERENCES patients(id) ON DELETE SET NULL,
+  detail TEXT,                              -- no PHI
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','acknowledged','resolved')),
+  resolved_by INTEGER REFERENCES users(id),
+  resolved_at TEXT,
+  resolution_note TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_security_alerts_status ON security_alerts(status, ts);
