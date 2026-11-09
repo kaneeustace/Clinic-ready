@@ -157,6 +157,7 @@ function loginPage(req, { error, email = "" } = {}) {
         <div class="card login__card">
           <div class="login__brand"><span class="logo-dot" aria-hidden="true"></span> Clinic Ready <strong>EHR</strong></div>
           <h1>Staff sign in</h1>
+          ${req.db.prepare("SELECT COUNT(*) AS n FROM users").get().n === 0 ? html`<p class="alert alert--warn" role="status"><strong>Setup isn't finished: no staff accounts exist yet.</strong> In your hosting settings, set EHR_ADMIN_EMAIL and EHR_ADMIN_PASSWORD (12+ characters, using 3 of: lowercase, uppercase, number, symbol), then redeploy.</p>` : ""}
           ${req.query.expired ? html`<p class="alert alert--info" role="status">You were signed out after a period of inactivity.</p>` : ""}
           ${error ? html`<p class="alert alert--error" role="alert">${error}</p>` : ""}
           <form method="post" action="/ehr/login" class="stack">

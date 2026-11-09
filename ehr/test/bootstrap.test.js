@@ -17,9 +17,33 @@ test("creates the first admin from env vars", () => {
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM patients").get().n, 0, "no demo data in production bootstrap");
 });
 
-test("rejects a weak admin password", () => {
+test("weak admin password is logged, not thrown, and creates nothing", () => {
   const db = openDb(":memory:");
-  assert.throws(() => bootstrap(db, { EHR_ADMIN_EMAIL: "a@b.co", EHR_ADMIN_PASSWORD: "short" }, quiet), /rejected/);
+  const errors = [];
+  const r = bootstrap(db, { EHR_ADMIN_EMAIL: "a@b.co", EHR_ADMIN_PASSWORD: "short" }, { warn() {}, error: (m) => errors.push(m) });
+  assert.equal(r, "error");
+  assert.match(errors[0], /rejected/);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM users").get().n, 0);
+});
+
+test("EHR_ADMIN_RESET resets an existing admin's password and unlocks it", () => {
+  const db = openDb(":memory:");
+  const env = { EHR_ADMIN_EMAIL: "owner@clinic.example", EHR_ADMIN_PASSWORD: "Strong-Pass-2026!" };
+  bootstrap(db, env, quiet);
+  db.prepare("UPDATE users SET locked_until = '2999-01-01 00:00:00', active = 0").run();
+  const r = bootstrap(db, { ...env, EHR_ADMIN_PASSWORD: "Another-Pass-2026!", EHR_ADMIN_RESET: "1" }, quiet);
+  assert.equal(r, "reset");
+  const u = db.prepare("SELECT * FROM users").get();
+  assert.ok(verifyPassword("Another-Pass-2026!", u.password_hash));
+  assert.equal(u.active, 1);
+  assert.equal(u.locked_until, null);
+});
+
+test("EHR_ADMIN_RESET creates the admin when other users exist", () => {
+  const db = openDb(":memory:");
+  bootstrap(db, { EHR_DEMO: "1" }, quiet);
+  bootstrap(db, { EHR_ADMIN_EMAIL: "new@clinic.example", EHR_ADMIN_PASSWORD: "Strong-Pass-2026!", EHR_ADMIN_RESET: "1" }, quiet);
+  assert.equal(db.prepare("SELECT role FROM users WHERE email = 'new@clinic.example'").get().role, "admin");
 });
 
 test("does nothing once users exist", () => {
