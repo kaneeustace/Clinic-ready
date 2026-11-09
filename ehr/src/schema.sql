@@ -272,3 +272,108 @@ CREATE TABLE IF NOT EXISTS appointment_requests (
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- ---------------------------------------------------------------------------
+-- Treatment plan v2 (person-centered, measurable, versioned). See docs/treatment-plan-spec.md.
+-- treatment_plans gains columns via migrate() in db.js (ALTER TABLE ADD COLUMN).
+-- The legacy treatment_goals table is kept read-only for history; new plans use the tables below.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS plan_problems (
+  id INTEGER PRIMARY KEY,
+  plan_id INTEGER NOT NULL REFERENCES treatment_plans(id) ON DELETE CASCADE,
+  sort INTEGER NOT NULL DEFAULT 0,
+  title TEXT NOT NULL,                      -- e.g. 'Depressed mood'
+  behavioral_definition TEXT,               -- how it shows up for this client (frequency, impact)
+  icd10_code TEXT,                          -- linked diagnosis
+  asam_dimension INTEGER CHECK (asam_dimension BETWEEN 1 AND 6 OR asam_dimension IS NULL),
+  is_driver INTEGER NOT NULL DEFAULT 0,     -- ASAM dimensional driver of level of care
+  stage_of_change TEXT CHECK (stage_of_change IN ('precontemplation','contemplation','preparation','action','maintenance') OR stage_of_change IS NULL),
+  priority TEXT CHECK (priority IN ('high','medium','low') OR priority IS NULL),
+  barriers TEXT,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','resolved','deferred','referred'))
+);
+CREATE TABLE IF NOT EXISTS plan_goals (
+  id INTEGER PRIMARY KEY,
+  problem_id INTEGER NOT NULL REFERENCES plan_problems(id) ON DELETE CASCADE,
+  sort INTEGER NOT NULL DEFAULT 0,
+  client_words TEXT,                        -- verbatim, in the client's own words
+  goal_text TEXT NOT NULL                   -- clinical restatement of the long-term goal
+);
+CREATE TABLE IF NOT EXISTS plan_objectives (
+  id INTEGER PRIMARY KEY,
+  goal_id INTEGER NOT NULL REFERENCES plan_goals(id) ON DELETE CASCADE,
+  sort INTEGER NOT NULL DEFAULT 0,
+  text TEXT NOT NULL,                       -- SMART statement
+  measure_type TEXT NOT NULL DEFAULT 'attainment' CHECK (measure_type IN ('instrument','frequency','duration','rating','attainment')),
+  instrument TEXT,                          -- e.g. 'PHQ9' when measure_type = 'instrument'
+  baseline_value REAL,
+  target_value REAL,
+  direction TEXT CHECK (direction IN ('decrease','increase','achieve') OR direction IS NULL),
+  unit TEXT,                                -- e.g. 'times per week', 'hours per day'
+  measurement_method TEXT,                  -- how and how often it is measured
+  target_date TEXT,
+  linked_strength TEXT,
+  status TEXT NOT NULL DEFAULT 'not_started' CHECK (status IN ('not_started','progressing','partially_met','met','not_met','regressed','revised','discontinued')),
+  current_value REAL,
+  current_value_on TEXT
+);
+CREATE TABLE IF NOT EXISTS plan_interventions (
+  id INTEGER PRIMARY KEY,
+  objective_id INTEGER NOT NULL REFERENCES plan_objectives(id) ON DELETE CASCADE,
+  sort INTEGER NOT NULL DEFAULT 0,
+  kind TEXT NOT NULL DEFAULT 'professional' CHECK (kind IN ('professional','self_directed','natural_support')),
+  modality TEXT,                            -- e.g. 'CBT', 'Medication management', 'Peer support'
+  description TEXT NOT NULL,                -- specific technique / action and its purpose
+  frequency TEXT,                           -- e.g. 'Weekly, 53 min'
+  duration TEXT,                            -- e.g. '12 weeks' / '12 sessions'
+  responsible_user_id INTEGER REFERENCES users(id),
+  responsible_text TEXT                     -- when not a staff member (client, family, peer)
+);
+CREATE TABLE IF NOT EXISTS plan_signatures (
+  id INTEGER PRIMARY KEY,
+  plan_id INTEGER NOT NULL REFERENCES treatment_plans(id) ON DELETE CASCADE,
+  role TEXT NOT NULL CHECK (role IN ('clinician','client','guardian','supervisor')),
+  signer_user_id INTEGER REFERENCES users(id),  -- staff signers
+  signer_name TEXT NOT NULL,
+  method TEXT CHECK (method IN ('password','in_person','electronic','verbal') OR method IS NULL),
+  declined INTEGER NOT NULL DEFAULT 0,      -- client/guardian declined or unable to sign
+  declined_reason TEXT,
+  copy_offered INTEGER NOT NULL DEFAULT 0,
+  signed_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS plan_reviews (
+  id INTEGER PRIMARY KEY,
+  plan_id INTEGER NOT NULL REFERENCES treatment_plans(id) ON DELETE CASCADE,
+  review_date TEXT NOT NULL,
+  reviewer_id INTEGER NOT NULL REFERENCES users(id),
+  participants TEXT,
+  client_perspective TEXT,
+  summary TEXT,
+  diagnosis_changes TEXT,
+  level_of_care_appropriate INTEGER,
+  outcome TEXT NOT NULL CHECK (outcome IN ('continue','revise','discharge')),
+  signed_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS plan_review_items (
+  id INTEGER PRIMARY KEY,
+  review_id INTEGER NOT NULL REFERENCES plan_reviews(id) ON DELETE CASCADE,
+  objective_id INTEGER NOT NULL REFERENCES plan_objectives(id) ON DELETE CASCADE,
+  status TEXT NOT NULL,
+  current_value REAL,
+  rationale TEXT,
+  action TEXT CHECK (action IN ('continue','modify','change_intervention','close') OR action IS NULL)
+);
+-- Golden thread: which objectives a progress note addressed.
+CREATE TABLE IF NOT EXISTS note_objectives (
+  note_id INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+  objective_id INTEGER NOT NULL REFERENCES plan_objectives(id) ON DELETE CASCADE,
+  progress TEXT CHECK (progress IN ('progressing','no_change','regressed','met') OR progress IS NULL),
+  comment TEXT,
+  PRIMARY KEY (note_id, objective_id)
+);
+CREATE INDEX IF NOT EXISTS idx_plan_problems_plan ON plan_problems(plan_id, sort);
+CREATE INDEX IF NOT EXISTS idx_plan_goals_problem ON plan_goals(problem_id, sort);
+CREATE INDEX IF NOT EXISTS idx_plan_objectives_goal ON plan_objectives(goal_id, sort);
+CREATE INDEX IF NOT EXISTS idx_plan_interventions_obj ON plan_interventions(objective_id, sort);
+CREATE INDEX IF NOT EXISTS idx_note_objectives_obj ON note_objectives(objective_id);

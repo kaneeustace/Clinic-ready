@@ -28,6 +28,34 @@ function migrate(db, schema) {
     ["notes", "'safety_plan'", 2, ["CREATE INDEX IF NOT EXISTS idx_notes_patient ON notes(patient_id, created_at);"]],
     ["assessments", "'ASRS'", 1, ["CREATE INDEX IF NOT EXISTS idx_assess_patient ON assessments(patient_id, instrument, administered_on);"]],
   ];
+  // Columns added after first release (ALTER TABLE ADD COLUMN is safe and instant in SQLite).
+  const ADD_COLUMNS = {
+    treatment_plans: [
+      ["plan_type", "TEXT NOT NULL DEFAULT 'mental_health'"],   // mental_health | sud | co_occurring
+      ["version", "INTEGER NOT NULL DEFAULT 1"],
+      ["supersedes_id", "INTEGER REFERENCES treatment_plans(id)"],
+      ["diagnoses", "TEXT"],                 // JSON snapshot [{code, description, primary}]
+      ["client_vision", "TEXT"],             // client's overall goal, own words
+      ["needs", "TEXT"], ["abilities", "TEXT"], ["preferences", "TEXT"],
+      ["natural_supports", "TEXT"], ["family_involvement", "TEXT"],
+      ["service_summary", "TEXT"],           // type, amount, frequency, duration of services
+      ["modality_rationale", "TEXT"],        // why this treatment approach
+      ["estimated_duration", "TEXT"],        // e.g. '16-20 sessions over 6 months'
+      ["expected_outcome", "TEXT"],          // expected improvement / capacity to benefit
+      ["discharge_criteria", "TEXT"], ["aftercare_referrals", "TEXT"],
+      ["safety_plan_note_id", "INTEGER REFERENCES notes(id)"],
+      ["review_interval_days", "INTEGER NOT NULL DEFAULT 90"],
+      ["level_of_care", "TEXT"], ["loc_indicated", "TEXT"], ["loc_adjusted", "TEXT"], ["loc_reason", "TEXT"],
+      ["continued_stay", "TEXT"], ["mat_plan", "TEXT"], ["drug_testing_plan", "TEXT"],
+      ["relapse_prevention", "TEXT"], ["recovery_supports", "TEXT"],
+      ["activated_at", "TEXT"], ["ended_at", "TEXT"], ["end_reason", "TEXT"],
+    ],
+  };
+  for (const [table, cols] of Object.entries(ADD_COLUMNS)) {
+    const have = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name));
+    for (const [name, def] of cols) if (!have.has(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${def}`);
+  }
+
   for (const [table, marker, count, indexes] of REBUILDS) {
     const current = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(table);
     if (!current || current.sql.split(marker).length - 1 >= count) continue;
