@@ -83,6 +83,12 @@
         firstInvalid.focus();
         return;
       }
+      var endpoint = form.getAttribute("data-endpoint");
+      if (endpoint && window.fetch) {
+        e.preventDefault();
+        submitToEndpoint(form, endpoint);
+        return;
+      }
       if (!form.getAttribute("action")) {
         e.preventDefault();
         var status = form.querySelector(".form-status");
@@ -94,4 +100,58 @@
       }
     });
   });
+
+  function showStatus(form, message, isError) {
+    var status = form.querySelector(".form-status");
+    if (!status) return;
+    if (!status.dataset.success) status.dataset.success = status.textContent;
+    status.textContent = message || status.dataset.success;
+    status.style.background = isError ? "#fbe5df" : "";
+    status.style.color = isError ? "#a2361c" : "";
+    status.hidden = false;
+    status.focus();
+  }
+
+  // Submit a validated form as JSON to a same-origin API endpoint.
+  function submitToEndpoint(form, endpoint) {
+    var button = form.querySelector('[type="submit"]');
+    if (button) { button.disabled = true; button.dataset.label = button.textContent; button.textContent = "Sending…"; }
+    var data = {};
+    new FormData(form).forEach(function (value, key) { data[key] = value; });
+    fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      body: JSON.stringify(data),
+      credentials: "same-origin"
+    }).then(function (res) {
+      return res.json().catch(function () { return {}; }).then(function (body) { return { status: res.status, body: body }; });
+    }).then(function (r) {
+      if (r.status === 200 || r.status === 201) {
+        form.reset();
+        showStatus(form);
+      } else if (r.status === 400 && r.body && r.body.fields) {
+        var first = null;
+        Object.keys(r.body.fields).forEach(function (name) {
+          var field = form.querySelector('[name="' + name + '"]');
+          if (field) { field.setAttribute("aria-invalid", "true"); if (!first) first = field; }
+        });
+        showStatus(form, "Please check the highlighted fields and try again.", true);
+        if (first) first.focus();
+      } else if (r.status === 429) {
+        showStatus(form, "We've received several requests from this device. Please call us at (555) 010-0123.", true);
+      } else {
+        showStatus(form, "Something went wrong sending your request. Please call us at (555) 010-0123.", true);
+      }
+    }).catch(function () {
+      showStatus(form, "We couldn't reach our server. Please call us at (555) 010-0123.", true);
+    }).then(function () {
+      if (button) { button.disabled = false; button.textContent = button.dataset.label; }
+    });
+  }
+
+  // Non-JS fallback lands on ?submitted=1
+  if (/[?&]submitted=1/.test(location.search)) {
+    var f = document.querySelector("form[data-endpoint]");
+    if (f) showStatus(f);
+  }
 })();

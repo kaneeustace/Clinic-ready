@@ -80,7 +80,7 @@
               Associate Agreement) before going live. Do not send submissions over
               plain email.
             -->
-            <form class="form" data-validate aria-describedby="form-required-note">
+            <form class="form" data-validate data-endpoint="/api/appointment-requests" method="post" action="/api/appointment-requests" aria-describedby="form-required-note">
               <p class="small muted" id="form-required-note">Fields marked "(required)" must be completed. Everything else is optional.</p>
 
               <div class="form-row">
@@ -194,6 +194,10 @@
                 <label class="choice" for="consent"><input type="checkbox" id="consent" name="consent" value="yes" required data-error="Please confirm you understand this form is not for emergencies and agree to be contacted."> <span>I understand this form is not for emergencies, and I agree to be contacted by Clinic Ready Behavioral Health using the information I've provided. <span class="muted">(required)</span></span></label>
               </div>
 
+              <div class="visually-hidden" aria-hidden="true">
+                <label for="website">Leave this field empty</label>
+                <input type="text" id="website" name="website" tabindex="-1" autocomplete="off">
+              </div>
               <div class="btn-row">
                 <button type="submit" class="btn btn--primary">Send request</button>
               </div>

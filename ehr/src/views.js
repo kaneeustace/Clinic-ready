@@ -153,6 +153,7 @@ function page(req, { title, active = "", body, bare = false }) {
             <div class="topbar__demo">Demo environment. Use synthetic data only.</div>
             <div class="topbar__user">
               <span>${user.name}${user.credentials ? `, ${user.credentials}` : ""} · <span class="muted">${humanize(user.role)}</span></span>
+              <a class="btn btn--ghost btn--sm" href="/ehr/account">Account</a>
               <form method="post" action="/ehr/logout">${csrfField(req)}<button class="btn btn--ghost btn--sm" type="submit">Sign out</button></form>
             </div>
           </header>
