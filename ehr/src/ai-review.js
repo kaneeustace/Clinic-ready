@@ -166,7 +166,10 @@ function aiConfigured() {
 }
 
 async function aiReview(ctx) {
-  const client = clientOverride || new Anthropic({ timeout: 120_000, maxRetries: 2 });
+  // Personal Console keys (sk-ant-usr-...) that span several workspaces must name one.
+  const workspace = process.env.ANTHROPIC_WORKSPACE_ID;
+  const client = clientOverride || new Anthropic({ timeout: 120_000, maxRetries: 2,
+    ...(workspace ? { defaultHeaders: { "anthropic-workspace-id": workspace } } : {}) });
   const response = await client.beta.messages.create({
     model: MODEL,
     max_tokens: 16000,
@@ -199,7 +202,10 @@ async function reviewNote(db, note) {
       ai = await aiReview(ctx);
     } catch (err) {
       const status = err && err.status;
-      ai = { ok: false, error: status === 429 ? "The AI reviewer is busy (rate limited). Try again in a minute."
+      const msg = String((err && err.message) || "");
+      ai = { ok: false, error: /credit balance/i.test(msg) ? "The Anthropic account has no API credits. Add credits under Settings → Billing in the Claude Console."
+        : /workspace/i.test(msg) ? "The API key needs a workspace. Set ANTHROPIC_WORKSPACE_ID in the hosting settings."
+        : status === 429 ? "The AI reviewer is busy (rate limited). Try again in a minute."
         : status === 401 || status === 403 ? "The AI reviewer isn't authorized. Check the Anthropic API key in the hosting settings."
         : "The AI reviewer couldn't be reached. The rule-based checks above still apply." };
       console.error("AI note review failed:", status || "", err && err.message);

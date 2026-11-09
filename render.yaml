@@ -38,6 +38,9 @@ services:
         value: "0"
       - key: ANTHROPIC_API_KEY
         sync: false
+      # Only needed if the key spans several workspaces and requests are refused.
+      - key: ANTHROPIC_WORKSPACE_ID
+        sync: false
       # Encrypted backups (HIPAA contingency plan). Without EHR_BACKUP_KEY backups are DISABLED.
       # Generate: node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
       # and keep a copy in your password manager: without it, backups cannot be decrypted.

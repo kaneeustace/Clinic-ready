@@ -92,6 +92,8 @@ test("AI refusal and API errors degrade to rule checks", async () => {
   assert.equal(r.status, 200);
   assert.match(r.text, /busy \(rate limited\)/);
   assert.match(r.text, /Rule|start and end times/);
+  ai.setClient({ beta: { messages: { create: async () => { const e = new Error("Your credit balance is too low to access the Anthropic API."); e.status = 400; throw e; } } } });
+  assert.match((await c.post(`/ehr/notes/${id}/compliance-review`)).text, /has no API credits/);
 });
 
 test("front desk and billing cannot run compliance checks", async () => {
