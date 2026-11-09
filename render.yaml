@@ -33,6 +33,15 @@ services:
         sync: false
       - key: EHR_ADMIN_PASSWORD
         sync: false
+      # Encrypted backups (HIPAA contingency plan). Without EHR_BACKUP_KEY backups are DISABLED.
+      # Generate: node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+      # and keep a copy in your password manager: without it, backups cannot be decrypted.
+      # Backups on this same disk are NOT enough on their own: off-site copies are still required
+      # (Render disk snapshots, or copying to a HIPAA-covered object store under a BAA).
+      - key: EHR_BACKUP_KEY
+        sync: false
+      - key: EHR_BACKUP_DIR
+        value: /var/data/backups
 
   # Demo copy: fictional staff + patients, free instance, no disk.
   # The database resets to fresh sample data whenever the instance restarts.

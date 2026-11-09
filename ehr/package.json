@@ -9,7 +9,10 @@
     "start": "node --no-warnings server.js",
     "dev": "node --no-warnings --watch server.js",
     "seed": "node --no-warnings src/seed.js",
-    "test": "node --no-warnings --test \"test/**/*.test.js\""
+    "test": "node --no-warnings --test \"test/**/*.test.js\"",
+    "backup": "node --no-warnings scripts/backup.js",
+    "backup:verify": "node --no-warnings scripts/verify-backup.js",
+    "backup:restore": "node --no-warnings scripts/restore-backup.js"
   },
   "dependencies": {
     "express": "^5.1.0"

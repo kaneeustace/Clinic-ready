@@ -12,6 +12,10 @@ require("./src/bootstrap").bootstrap(db);
 // Purge expired sessions hourly.
 setInterval(() => db.prepare("DELETE FROM sessions WHERE expires_at < datetime('now')").run(), 3600e3).unref();
 
+// Encrypted backups (HIPAA contingency plan): at startup, then every EHR_BACKUP_INTERVAL_HOURS.
+// Disabled with a warning when EHR_BACKUP_KEY is missing; never writes unencrypted backups.
+require("./src/backup").scheduleBackups(db);
+
 createApp(db).listen(PORT, () => {
   console.log(`Clinic Ready running at http://localhost:${PORT}  (EHR: http://localhost:${PORT}/ehr)`);
 });
