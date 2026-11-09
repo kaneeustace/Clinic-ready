@@ -32,6 +32,7 @@ function migrate(db, schema) {
   const ADD_COLUMNS = {
     // HIPAA hardening (see docs/hipaa/)
     users: [
+      ["education_level", "TEXT"],            // AHCCCS modifier HM/HN/HO/HP; derived from credentials when empty
       ["mfa_secret", "TEXT"],                 // base32 TOTP secret (encrypted at rest when EHR_DATA_KEY is set)
       ["mfa_enabled", "INTEGER NOT NULL DEFAULT 0"],
       ["mfa_recovery", "TEXT"],               // JSON array of sha256 hashes of one-time recovery codes
@@ -40,6 +41,16 @@ function migrate(db, schema) {
     ],
     sessions: [
       ["mfa_pending", "INTEGER NOT NULL DEFAULT 0"], // password accepted, second factor not yet verified
+    ],
+    // AHCCCS (Arizona Medicaid) support, see src/payers.js
+    patients: [
+      ["ahcccs_id", "TEXT"],                  // AHCCCS member ID (e.g. A12345678)
+      ["gender", "TEXT"],                     // AHCCCS expects gender in member demographics
+    ],
+    charges: [
+      ["pos", "TEXT"],                        // place of service (member's location for telehealth under AHCCCS)
+      ["minutes", "INTEGER"],                 // documented minutes supporting time-based units
+      ["note_id", "INTEGER REFERENCES notes(id)"],
     ],
     audit_log: [
       ["prev_hash", "TEXT"],                  // tamper-evident hash chain
