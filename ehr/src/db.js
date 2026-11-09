@@ -75,6 +75,12 @@ function migrate(db, schema) {
       ["continued_stay", "TEXT"], ["mat_plan", "TEXT"], ["drug_testing_plan", "TEXT"],
       ["relapse_prevention", "TEXT"], ["recovery_supports", "TEXT"],
       ["activated_at", "TEXT"], ["ended_at", "TEXT"], ["end_reason", "TEXT"],
+      // AHCCCS Service Plan (AMPM 320-O §G)
+      ["court_ordered", "TEXT"],             // court-ordered treatment requirements, if any
+      ["team_members", "TEXT"],              // Child and Family Team / Adult Recovery Team members and roles
+      ["peer_support_offered", "TEXT"],      // 'accepted' | 'declined' | 'not_offered' (+ notes)
+      ["crisis_contacts", "TEXT"],
+      ["smi_agreement", "TEXT"],             // SMI members: agreement/disagreement with the plan (Attachment A)
     ],
   };
   for (const [table, cols] of Object.entries(ADD_COLUMNS)) {
