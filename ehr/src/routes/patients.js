@@ -755,7 +755,6 @@ function renderOverview(req, res, patient, state = null, status = 200) {
     </section>` : "";
 
   res.status(status).send(chartPage(req, patient, "overview", html`
-    <h2 class="visually-hidden">Overview</h2>
     <div class="grid grid--2">${demographics}${contact}</div>
     ${allergyCard}
     ${dxCard}
