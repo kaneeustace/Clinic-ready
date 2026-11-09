@@ -43,8 +43,8 @@ router.get("/", (req, res) => {
       ${flags.length ? html`
         <section class="card card--alert">
           <h2>Safety follow-up</h2>
-          <p class="muted">PHQ-9 item 9 (thoughts of self-harm) was endorsed in the last 14 days. Make sure a risk assessment is documented.</p>
-          <ul class="list">${flags.map((f) => html`<li><a href="/ehr/patients/${f.patient_id}/measures">${patientName(f)}</a> · PHQ-9 ${f.total_score} on ${f.administered_on}</li>`)}</ul>
+          <p class="muted">A suicide risk screen (PHQ-9 item 9 or C-SSRS) was positive in the last 14 days. Make sure a risk assessment and safety plan are documented.</p>
+          <ul class="list">${flags.map((f) => html`<li><a href="/ehr/patients/${f.patient_id}/measures">${patientName(f)}</a> · ${f.instrument === "CSSRS" ? `C-SSRS ${f.severity}` : `PHQ-9 ${f.total_score}, item 9 endorsed`} on ${f.administered_on}</li>`)}</ul>
         </section>` : ""}
       ${can(u, "schedule:read") ? html`
         <section class="card">

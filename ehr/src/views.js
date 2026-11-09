@@ -243,7 +243,7 @@ function chartPage(req, patient, tab, body, { title } = {}) {
           ${allergies.length
             ? html`<span class="pill pill--bad">Allergies: ${allergies.map((a) => a.substance).join(", ")}</span>`
             : html`<span class="pill">NKA (no known allergies)</span>`}
-          ${flagged ? html`<span class="pill pill--bad">Safety flag: PHQ-9 item 9 endorsed in last 30 days</span>` : ""}
+          ${flagged ? html`<span class="pill pill--bad">Safety flag: positive suicide risk screen in last 30 days</span>` : ""}
         </div>
       </div>
       <div class="chart-head__actions">

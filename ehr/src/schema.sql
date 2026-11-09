@@ -200,7 +200,7 @@ CREATE TABLE IF NOT EXISTS assessments (
   id INTEGER PRIMARY KEY,
   patient_id INTEGER NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
   appointment_id INTEGER REFERENCES appointments(id) ON DELETE SET NULL,
-  instrument TEXT NOT NULL CHECK (instrument IN ('PHQ9','GAD7')),
+  instrument TEXT NOT NULL CHECK (instrument IN ('PHQ9','GAD7','CSSRS','AUDIT','DAST10','PCL5','MDQ','ASRS')),
   responses TEXT NOT NULL,                  -- JSON array of item scores
   total_score INTEGER NOT NULL,
   severity TEXT NOT NULL,
