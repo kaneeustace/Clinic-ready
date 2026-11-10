@@ -23,7 +23,7 @@ const { html, raw, chartPage, notFound, csrfField, getPatient, fmtTimestamp } = 
 const router = express.Router();
 const MAX_BYTES = 5 * 1024 * 1024;
 const MAX_PER_PATIENT = 60;
-const UPLOAD_PATH_RE = /^\/ehr\/patients\/\d+\/photos\/?$/;
+const UPLOAD_PATH_RE = /^\/ehr\/(patients\/\d+\/photos|scan)\/?$/; // picture uploads and PDF note scans
 
 const CATEGORIES = [
   { value: "profile", label: "Profile photo (identification)" },
@@ -43,7 +43,7 @@ function sniff(buf) {
 }
 
 /** Larger body parser for the upload route only, applied after the session is known (see app.js). */
-const bigForm = express.urlencoded({ extended: false, limit: "8mb" });
+const bigForm = express.urlencoded({ extended: false, limit: "16mb" }); // each route checks its own decoded-size limit
 function uploadBodyParser(req, res, next) {
   if (req.method === "POST" && req.session && UPLOAD_PATH_RE.test(req.originalUrl.split("?")[0])) return bigForm(req, res, next);
   next();

@@ -404,6 +404,52 @@ async function aiReview(ctx) {
   return { ok: true, summary: String(parsed.summary || ""), findings, model: response.model };
 }
 
+const PDF_PAYERS = {
+  commercial: "a commercial insurance plan",
+  medicare: "Medicare (apply Medicare LCD documentation requirements for outpatient psychiatric services)",
+  medicaid: "a state Medicaid plan",
+  ahcccs: "AHCCCS (Arizona Medicaid)",
+};
+
+/**
+ * Review an uploaded PDF note (e.g. written in another system or scanned from paper). AI only: rule-based checks
+ * need the EHR's structured fields. The PDF is sent to the model and not stored. Never throws.
+ */
+async function reviewPdf({ data, payer = "commercial", noteType = "", context = "" }) {
+  if (!aiConfigured()) return { ok: false, skipped: true };
+  const payerText = PDF_PAYERS[payer] || PDF_PAYERS.commercial;
+  const system = SYSTEM_PROMPT.replace("You receive one clinical note as JSON (its sections plus billing and treatment plan context)",
+    "You receive one clinical note as a PDF document, possibly scanned, handwritten or exported from another system")
+    + `\n\nIf the PDF is not a clinical note, or it is unreadable, say so in the summary and return no findings. If it contains several notes, review each and say which note each finding is about.`
+    + (payer === "ahcccs" ? AHCCCS_PROMPT.replace("This member is enrolled in AHCCCS (Arizona Medicaid). ", "") : "");
+  const ask = [`Review this note for ${payerText}.`, noteType ? `The clinician says it is a ${noteType} note.` : "", context ? `Additional context from the clinician: ${context}` : ""].filter(Boolean).join(" ");
+  try {
+    const response = await makeClient(180_000).beta.messages.create({
+      model: MODEL,
+      max_tokens: 16000,
+      betas: ["server-side-fallback-2026-07-01"],
+      fallbacks: "default",
+      output_config: { effort: "high", format: { type: "json_schema", schema: FINDINGS_SCHEMA } },
+      system,
+      messages: [{ role: "user", content: [
+        { type: "document", source: { type: "base64", media_type: "application/pdf", data } },
+        { type: "text", text: ask },
+      ] }],
+    });
+    if (response.stop_reason === "refusal") return { ok: false, error: "The AI reviewer declined this document." };
+    if (response.stop_reason === "max_tokens") return { ok: false, error: "The AI review was cut off before finishing. Try a shorter PDF." };
+    const text = response.content.filter((b) => b.type === "text").map((b) => b.text).join("");
+    let parsed;
+    try { parsed = JSON.parse(text); } catch { return { ok: false, error: "The AI review returned an unreadable result. Try again." }; }
+    return { ok: true, summary: String(parsed.summary || ""), findings: (parsed.findings || []).map((f) => ({ ...f, source: "ai" })), model: response.model };
+  } catch (err) {
+    console.error("AI PDF review failed:", (err && err.status) || "", err && err.message);
+    const msg = String((err && err.message) || "");
+    return { ok: false, error: /pdf|document|page/i.test(msg) && err.status === 400 && !/credit/i.test(msg)
+      ? "The PDF couldn't be read (it may be password-protected, damaged or over 100 pages)." : explainError(err) };
+  }
+}
+
 /** Run both layers. Never throws: AI failures come back as { ai: { ok: false, error } }. */
 async function reviewNote(db, note) {
   const ctx = buildContext(db, note);
@@ -421,4 +467,4 @@ async function reviewNote(db, note) {
   return { rules, ai, ctx };
 }
 
-module.exports = { reviewNote, testConnection, aiStatus, explainError, ruleChecks, ahcccsChecks, buildContext, aiConfigured, setClient, FINDINGS_SCHEMA, CPT_TIME, MODEL, AHCCCS_PROMPT };
+module.exports = { reviewNote, reviewPdf, PDF_PAYERS, testConnection, aiStatus, explainError, ruleChecks, ahcccsChecks, buildContext, aiConfigured, setClient, FINDINGS_SCHEMA, CPT_TIME, MODEL, AHCCCS_PROMPT };

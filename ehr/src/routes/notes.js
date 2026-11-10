@@ -1172,6 +1172,7 @@ function renderNote(req, res, { note, patient }, { signErrs = {}, addendumError 
       ${canWrite && COMPLIANCE_TYPES.includes(note.type) ? html`
         <form class="inline-form" method="post" action="/ehr/notes/${note.id}/compliance-review">${csrfField(req)}
           <button class="btn btn--sm btn--primary" type="submit">Check insurance compliance</button></form>` : ""}
+      ${canWrite ? html`<a class="btn btn--sm btn--ghost" href="/ehr/scan">Scan a PDF note</a>` : ""}
       ${isAuthor && isDraft ? html`
         <a class="btn btn--sm" href="/ehr/notes/${note.id}/edit">Edit draft</a>
         <form class="inline-form" method="post" action="/ehr/notes/${note.id}/delete" data-confirm="Delete this draft? This cannot be undone.">
@@ -1559,5 +1560,5 @@ router.post("/notes/:noteId/delete", requirePerm("clinical:write"), (req, res) =
   res.redirect(`/ehr/patients/${patient.id}/notes`);
 });
 
-module.exports = { router, TYPES, PLAN_REQUIRED_TYPES, activePlan, signErrors, memberContext, findClone, lateInfo, cosignStatus,
+module.exports = { router, reviewPanel, TYPES, PLAN_REQUIRED_TYPES, activePlan, signErrors, memberContext, findClone, lateInfo, cosignStatus,
   sessionMinutes, fieldsFor, needsCosign, COSIGN_PREFIX };

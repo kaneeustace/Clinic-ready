@@ -120,6 +120,7 @@ const NAV = [
   { group: "Workspace", key: "schedule", href: "/ehr/schedule", label: "Schedule", perm: "schedule:read", icon: "M4 6h16v14H4zM4 10h16M9 3v4M15 3v4" },
   { group: "Workspace", key: "census", href: "/ehr/census", label: "Census", perm: "patients:read", icon: "M4 20V10M10 20V4M16 20v-7M22 20H2" },
   { group: "Workspace", key: "notes", href: "/ehr/notes", label: "My notes", perm: "clinical:write", icon: "M6 3h9l4 4v14H6zM9 12h7M9 16h5" },
+  { group: "Workspace", key: "scan", href: "/ehr/scan", label: "Note scanner", perm: "clinical:write", icon: "M7 3h7l5 5v13H7zM14 3v5h5M10 13h6M10 17h4M4 8v13" },
   { group: "Operations", key: "requests", href: "/ehr/requests", label: "Intake requests", perm: "requests:manage", icon: "M4 6h16v12H4zM4 7l8 6 8-6" },
   { group: "Operations", key: "billing", href: "/ehr/billing", label: "Billing", perm: "billing:read", icon: "M3 6h18v12H3zM3 10h18M7 15h4" },
   { group: "Operations", key: "security", href: "/ehr/security", label: "Security", perm: "admin", icon: "M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7zM9 12l2 2 4-4" },
@@ -230,7 +231,7 @@ function page(req, { title, active = "", body, bare = false }) {
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
   ${shell}
-  <script src="/ehr/static/ehr.js?v=11" defer></script>
+  <script src="/ehr/static/ehr.js?v=12" defer></script>
 </body>
 </html>`.s;
 }

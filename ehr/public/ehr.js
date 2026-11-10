@@ -111,6 +111,32 @@
     var target = document.querySelector("[data-install-hint]");
     if (target) target.appendChild(box); else spot.insertBefore(box, spot.firstChild);
   })();
+  // Note scanner: <form data-pdf-upload> reads the chosen PDF into pdf_data (the file input itself isn't sent).
+  document.querySelectorAll("form[data-pdf-upload]").forEach(function (form) {
+    var file = form.querySelector("[data-pdf-file]"), out = form.querySelector("input[name=pdf_data]");
+    var status = form.querySelector("[data-pdf-status]"), busy = false;
+    function say(t) { if (status) status.textContent = t; }
+    file.addEventListener("change", function () {
+      out.value = "";
+      var f = file.files && file.files[0];
+      if (!f) return;
+      if (f.type && f.type !== "application/pdf") { say("Choose a PDF file."); return; }
+      if (f.size > 10 * 1024 * 1024) { say("That PDF is over 10 MB."); return; }
+      busy = true; say("Reading PDF…");
+      var r = new FileReader();
+      r.onload = function () { out.value = String(r.result).replace(/^data:[^;]*;/, "data:application/pdf;"); busy = false; say("Ready to scan (" + Math.max(1, Math.round(f.size / 1024)) + " KB)."); };
+      r.onerror = function () { busy = false; say("That file couldn't be read."); };
+      r.readAsDataURL(f);
+    });
+    form.addEventListener("submit", function (e) {
+      if (busy) { e.preventDefault(); say("Still reading the PDF, try again in a moment."); return; }
+      if (!out.value) { e.preventDefault(); say("Choose a PDF first."); return; }
+      file.disabled = true;
+      var btn = form.querySelector("button[type=submit]");
+      if (btn) { btn.disabled = true; btn.textContent = "Scanning… this can take a minute"; }
+      say("Scanning with AI…");
+    });
+  });
   // Live signature countdowns: <span data-deadline="ISO" data-total-hours="24">
   function tick() {
     document.querySelectorAll("[data-deadline]").forEach(function (el) {
