@@ -179,7 +179,7 @@ function loginPage(req, { error, email = "" } = {}) {
     bare: true,
     body: html`
       <div class="login">
-        <div class="card login__card">
+        <div class="card login__card"><div data-install-hint></div>
           <div class="login__brand"><span class="logo-dot" aria-hidden="true"></span> Clinic Ready <strong>EHR</strong></div>
           <h1>Staff sign in</h1>
           ${req.db.prepare("SELECT COUNT(*) AS n FROM users").get().n === 0 ? html`<p class="alert alert--warn" role="status"><strong>Setup isn't finished: no staff accounts exist yet.</strong> <a href="/ehr/setup">Create the administrator account</a>.</p>` : ""}

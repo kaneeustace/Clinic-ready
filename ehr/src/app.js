@@ -84,6 +84,9 @@ function createApp(db) {
 
   /* ---------- EHR ---------- */
   app.use("/ehr/static", express.static(EHR_PUBLIC, { maxAge: "1h" }));
+  // Home-screen app (PWA): manifest and service worker must load without signing in, from /ehr so their scope covers the EHR.
+  app.get("/ehr/manifest.webmanifest", (req, res) => res.type("application/manifest+json").set("Cache-Control", "no-cache").sendFile(path.join(EHR_PUBLIC, "manifest.webmanifest")));
+  app.get("/ehr/sw.js", (req, res) => res.type("application/javascript").set({ "Cache-Control": "no-cache", "Service-Worker-Allowed": "/ehr" }).sendFile(path.join(EHR_PUBLIC, "sw.js")));
   app.use("/ehr", noStore, auth.sessionMiddleware, photos.uploadBodyParser, auth.csrfProtection);
   app.use("/ehr", auth.router);
   app.use("/ehr", auth.requireAuth);

@@ -72,3 +72,21 @@ test("html helper escapes interpolations", () => {
   const { html } = require("../src/views");
   assert.equal(String(html`<p>${"<script>"}</p>`), "<p>&lt;script&gt;</p>");
 });
+
+test("home-screen app: manifest, service worker and icons load without signing in", async () => {
+  const c = t.client();
+  const m = await c.get("/ehr/manifest.webmanifest");
+  assert.equal(m.status, 200);
+  const man = JSON.parse(m.text);
+  assert.equal(man.display, "standalone");
+  assert.equal(man.start_url, "/ehr");
+  const sw = await c.get("/ehr/sw.js");
+  assert.equal(sw.status, 200);
+  assert.match(sw.headers.get("content-type"), /javascript/);
+  assert.equal(sw.headers.get("service-worker-allowed"), "/ehr");
+  assert.doesNotMatch(sw.text, /caches\.open\([^)]*\)\.then\(\(c\) => c\.addAll/); // caches only the offline page
+  for (const f of ["icons/icon-180.png", "icons/icon-512.png", "offline.html"]) assert.equal((await c.get(`/ehr/static/${f}`)).status, 200, f);
+  const login = await c.get("/ehr/login");
+  assert.match(login.text, /apple-touch-icon/);
+  assert.match(login.text, /rel="manifest"/);
+});

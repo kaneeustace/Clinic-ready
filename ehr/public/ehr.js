@@ -87,6 +87,30 @@
     document.addEventListener("click", function (e) { if (more.open && !e.target.closest(".bottomnav__sheet") && !e.target.closest(".bottomnav__more > summary")) more.open = false; });
     document.addEventListener("keydown", function (e) { if (e.key === "Escape") more.open = false; });
   }
+  // Home-screen app: register the service worker (it caches no patient data; see /ehr/sw.js).
+  if ("serviceWorker" in navigator && location.protocol === "https:") {
+    navigator.serviceWorker.register("/ehr/sw.js", { scope: "/ehr" }).catch(function () {});
+  }
+  // iPhone/iPad in Safari (not yet installed): show how to add the app to the home screen. Dismissable.
+  (function () {
+    var ua = navigator.userAgent;
+    var ios = /iPhone|iPad|iPod/.test(ua) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    var standalone = window.navigator.standalone === true || (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches);
+    var dismissed = false;
+    try { dismissed = localStorage.getItem("cr-install-dismissed") === "1"; } catch (e) {}
+    var spot = document.querySelector("[data-install-hint]") || (document.querySelector(".hero") && document.querySelector(".hero").parentNode);
+    if (!ios || standalone || !spot) return;
+    if (dismissed && !document.querySelector("[data-install-hint]")) return;
+    var box = document.createElement("div");
+    box.className = "install-hint";
+    box.setAttribute("role", "note");
+    box.innerHTML = '<img src="/ehr/static/icons/icon-180.png" alt="" width="44" height="44">' +
+      '<div><strong>Get the Clinic Ready app</strong><span>Tap <svg viewBox="0 0 24 24" width="16" height="16" aria-label="Share" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 8l5-5 5 5M5 12v8h14v-8"/></svg> <b>Share</b> in Safari (on newer iPhones it\'s under <b>···</b>), then <b>Add to Home Screen</b>.</span></div>' +
+      '<button type="button" aria-label="Dismiss">&times;</button>';
+    box.querySelector("button").addEventListener("click", function () { box.remove(); try { localStorage.setItem("cr-install-dismissed", "1"); } catch (e) {} });
+    var target = document.querySelector("[data-install-hint]");
+    if (target) target.appendChild(box); else spot.insertBefore(box, spot.firstChild);
+  })();
   // Live signature countdowns: <span data-deadline="ISO" data-total-hours="24">
   function tick() {
     document.querySelectorAll("[data-deadline]").forEach(function (el) {
