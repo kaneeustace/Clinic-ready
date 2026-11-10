@@ -6,19 +6,31 @@ const { createApp } = require("./src/app");
 const PORT = Number(process.env.PORT || 3000);
 const DB_PATH = process.env.EHR_DB_PATH || path.join(__dirname, "data", "ehr.sqlite");
 
-const db = openDb(DB_PATH);
-require("./src/bootstrap").bootstrap(db);
+// Never start on temporary storage when a persistent disk is expected (see src/disk-guard.js).
+const guard = require("./src/disk-guard");
+(async () => {
+  if (guard.diskRequired(DB_PATH)) {
+    try { await guard.waitForDisk(DB_PATH); }
+    catch (e) { console.error(`[disk] ${e.message}`); process.exit(1); }
+  }
+  main();
+})();
 
-// Purge expired sessions hourly.
-setInterval(() => db.prepare("DELETE FROM sessions WHERE expires_at < datetime('now')").run(), 3600e3).unref();
+function main() {
+  const db = openDb(DB_PATH);
+  require("./src/bootstrap").bootstrap(db);
 
-// Encrypted backups (HIPAA contingency plan): at startup, then every EHR_BACKUP_INTERVAL_HOURS.
-// Disabled with a warning when EHR_BACKUP_KEY is missing; never writes unencrypted backups.
-require("./src/backup").scheduleBackups(db);
+  // Purge expired sessions hourly.
+  setInterval(() => db.prepare("DELETE FROM sessions WHERE expires_at < datetime('now')").run(), 3600e3).unref();
 
-// End-of-day outstanding-notes emails (counts only, no PHI). Needs EHR_MAIL_PROVIDER; see src/digest.js.
-require("./src/digest").scheduleDigests(db);
+  // Encrypted backups (HIPAA contingency plan): at startup, then every EHR_BACKUP_INTERVAL_HOURS.
+  // Disabled with a warning when EHR_BACKUP_KEY is missing; never writes unencrypted backups.
+  require("./src/backup").scheduleBackups(db);
 
-createApp(db).listen(PORT, () => {
-  console.log(`Clinic Ready running at http://localhost:${PORT}  (EHR: http://localhost:${PORT}/ehr)`);
-});
+  // End-of-day outstanding-notes emails (counts only, no PHI). Needs EHR_MAIL_PROVIDER; see src/digest.js.
+  require("./src/digest").scheduleDigests(db);
+
+  createApp(db).listen(PORT, () => {
+    console.log(`Clinic Ready running at http://localhost:${PORT}  (EHR: http://localhost:${PORT}/ehr)`);
+  });
+}
