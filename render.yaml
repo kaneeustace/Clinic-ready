@@ -34,8 +34,9 @@ services:
       - key: EHR_ADMIN_PASSWORD
         sync: false
       # AI note compliance review (optional). Turn on only after signing a BAA with Anthropic.
+      # Set to 1 in the Render dashboard to turn it on (not pinned here, so a Blueprint sync won't switch it back off).
       - key: EHR_AI_REVIEW
-        value: "0"
+        sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
       # Only needed if the key spans several workspaces and requests are refused.
