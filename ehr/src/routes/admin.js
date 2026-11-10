@@ -131,6 +131,7 @@ router.get("/admin", adminOnly, (req, res) => {
             <tbody>${ROLES.map((r) => html`<tr><td>${humanize(r)}</td><td>${byRole[r].active}</td><td>${byRole[r].inactive}</td></tr>`)}</tbody>
           </table>
         </section>
+        ${storageCard(req)}
         ${aiCard(req)}
         <section class="card">
           <h2>Security</h2>
@@ -147,6 +148,34 @@ router.get("/admin", adminOnly, (req, res) => {
       </div>`,
   }));
 });
+
+/* ------------------------------------------------------------------ */
+/* Data storage: is the database on a persistent disk?                */
+/* ------------------------------------------------------------------ */
+function storageStatus(db) {
+  const fs = require("node:fs"), path = require("node:path");
+  const file = (db.prepare("PRAGMA database_list").all().find((d) => d.name === "main") || {}).file || "";
+  let persistent = false, separateMount = false;
+  try {
+    const dir = path.dirname(file);
+    // A mounted disk (e.g. Render's /var/data) is on a different device from its parent folder.
+    separateMount = dir !== "/" && fs.statSync(path.dirname(dir)).dev !== fs.statSync(dir).dev;
+  } catch { /* in-memory or unreadable */ }
+  persistent = !!file && separateMount;
+  const onRender = !!process.env.RENDER;
+  return { file, persistent, onRender, sizeKb: file ? Math.round((fs.existsSync(file) ? fs.statSync(file).size : 0) / 1024) : 0 };
+}
+function storageCard(req) {
+  const st = storageStatus(req.db);
+  return html`
+    <section class="card" id="storage">
+      <div class="card__head"><h2>Data storage</h2>${st.persistent ? html`<span class="badge badge--good">Saved permanently</span>` : html`<span class="badge badge--bad">Erased on restart</span>`}</div>
+      ${st.persistent
+        ? html`<p>The database is on a persistent disk (${st.file}, ${st.sizeKb} KB). Updates and restarts keep your data.</p>`
+        : html`<p>The database is on temporary storage${st.file ? ` (${st.file})` : ""}. <strong>Everything is erased each time the app updates or restarts.</strong></p>
+          ${st.onRender ? html`<p class="small">Fix in Render: upgrade the <strong>clinic-ready</strong> service to the Starter plan, add a disk at <code>/var/data</code>, and set <code>EHR_DB_PATH=/var/data/ehr.sqlite</code>.</p>` : ""}`}
+    </section>`;
+}
 
 /* ------------------------------------------------------------------ */
 /* AI note review status + connection test (no patient data is sent)  */
