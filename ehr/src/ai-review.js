@@ -328,9 +328,12 @@ let clientOverride = null;
 /** Tests can inject a fake client: setClient({ beta: { messages: { create: async () => response } } }). */
 function setClient(c) { clientOverride = c; }
 
+/** EHR_AI_REVIEW accepts 1 / true / yes / on (any case, surrounding spaces ignored). */
+const aiFlagOn = (env = process.env) => /^(1|true|yes|on)$/i.test(String(env.EHR_AI_REVIEW ?? "").trim());
+
 function aiConfigured() {
   if (clientOverride) return true;
-  return process.env.EHR_AI_REVIEW === "1" && !!(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
+  return aiFlagOn() && !!(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN || "").trim();
 }
 
 function makeClient(timeout = 120_000) {
@@ -355,7 +358,8 @@ function explainError(err) {
 /** Status for the admin page: what's configured, without revealing secrets. */
 function aiStatus(env = process.env) {
   const key = env.ANTHROPIC_API_KEY || env.ANTHROPIC_AUTH_TOKEN || "";
-  return { flag: env.EHR_AI_REVIEW === "1", hasKey: !!key, keyKind: key.startsWith("sk-ant-usr-") ? "personal Console key" : key.startsWith("sk-ant-api") ? "API key" : key ? "key" : "",
+  const raw = env.EHR_AI_REVIEW;
+  return { flag: aiFlagOn(env), flagRaw: raw === undefined ? null : String(raw).slice(0, 20), hasKey: !!key.trim(), keyKind: key.startsWith("sk-ant-usr-") ? "personal Console key" : key.startsWith("sk-ant-api") ? "API key" : key ? "key" : "",
     workspace: !!env.ANTHROPIC_WORKSPACE_ID, enabled: aiConfigured(), model: MODEL };
 }
 

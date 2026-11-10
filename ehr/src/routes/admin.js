@@ -159,7 +159,7 @@ function aiCard(req, result = null) {
     <section class="card" id="ai">
       <div class="card__head"><h2>AI note review</h2>${st.enabled ? html`<span class="badge badge--good">On</span>` : html`<span class="badge badge--muted">Off</span>`}</div>
       <ul class="list-plain">
-        ${row(st.flag, html`Turned on (<code>EHR_AI_REVIEW=1</code>)`)}
+        ${row(st.flag, html`Turned on (<code>EHR_AI_REVIEW=1</code>) · the server sees ${st.flagRaw === null ? "no EHR_AI_REVIEW setting" : html`<code>${JSON.stringify(st.flagRaw)}</code>`}`)}
         ${row(st.hasKey, html`Anthropic key set (<code>ANTHROPIC_API_KEY</code>)${st.keyKind ? ` · ${st.keyKind}` : ""}`)}
         <li class="row"><span class="badge badge--muted">${st.workspace ? "Set" : "Not set"}</span> Workspace ID (only needed for some personal keys)</li>
       </ul>
