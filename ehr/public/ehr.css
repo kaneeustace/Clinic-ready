@@ -603,3 +603,13 @@ fieldset { background: linear-gradient(180deg, #f9fbfe, #f5f8fc); border-color: 
 .topbar { padding-top: max(.55rem, env(safe-area-inset-top)); }
 .login { padding-top: max(1.25rem, env(safe-area-inset-top)); padding-bottom: max(1.25rem, env(safe-area-inset-bottom)); }
 @media (display-mode: standalone) { body { overscroll-behavior-y: none; } }
+
+/* ---------- Clinic branding ---------- */
+.brand-logo { width: 30px; height: 30px; border-radius: 8px; object-fit: contain; background: #fff; flex: none; }
+.sidebar .brand-logo { box-shadow: 0 0 0 1px rgba(255,255,255,.15); }
+.brand-logo--lg, .logo-dot.brand-logo--lg { width: 64px; height: 64px; border-radius: 14px; }
+.logo-preview { display: flex; align-items: center; gap: 1rem; padding: 1rem; border-radius: 12px; background: var(--surface-2); }
+.login__brand .brand-logo { width: 36px; height: 36px; }
+.swatch { gap: .4rem; } .swatch__dot { width: 18px; height: 18px; border-radius: 50%; display: inline-block; box-shadow: inset 0 0 0 1px rgba(0,0,0,.1); }
+.card.stack { align-content: start; }
+:root { --grad-brand: linear-gradient(120deg, #1b2f63 0%, var(--primary) 55%, #149c96 100%); }

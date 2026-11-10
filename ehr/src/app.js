@@ -10,7 +10,7 @@ const EHR_PUBLIC = path.resolve(__dirname, "..", "public");
 
 // Feature modules. Each exports `router` (mounted at /ehr, behind login);
 // requests.js also exports `publicRouter` (mounted at /api, no login).
-const MODULES = ["dashboard", "patients", "schedule", "notes", "clinical", "plans", "billing", "requests", "records", "photos", "loc", "email", "scan", "security", "backups", "admin"];
+const MODULES = ["dashboard", "patients", "schedule", "notes", "clinical", "plans", "billing", "requests", "records", "photos", "loc", "email", "scan", "clinic", "ops", "security", "backups", "admin"];
 
 function securityHeaders(req, res, next) {
   res.set({
@@ -83,9 +83,13 @@ function createApp(db) {
   }
 
   /* ---------- EHR ---------- */
+  // Operator health check for multi-clinic hosting (token-protected; 404 unless EHR_OPS_TOKEN is set). No PHI.
+  app.use("/ops", require("./routes/ops").publicRouter);
   app.use("/ehr/static", express.static(EHR_PUBLIC, { maxAge: "1h" }));
   // Home-screen app (PWA): manifest and service worker must load without signing in, from /ehr so their scope covers the EHR.
-  app.get("/ehr/manifest.webmanifest", (req, res) => res.type("application/manifest+json").set("Cache-Control", "no-cache").sendFile(path.join(EHR_PUBLIC, "manifest.webmanifest")));
+  const clinicRoutes = require("./routes/clinic");
+  app.get("/ehr/manifest.webmanifest", clinicRoutes.manifestHandler(JSON.parse(fs.readFileSync(path.join(EHR_PUBLIC, "manifest.webmanifest"), "utf8"))));
+  app.get("/ehr/brand/logo", clinicRoutes.logoHandler);
   app.get("/ehr/sw.js", (req, res) => res.type("application/javascript").set({ "Cache-Control": "no-cache", "Service-Worker-Allowed": "/ehr" }).sendFile(path.join(EHR_PUBLIC, "sw.js")));
   app.use("/ehr", noStore, auth.sessionMiddleware, photos.uploadBodyParser, auth.csrfProtection);
   app.use("/ehr", auth.router);

@@ -23,7 +23,7 @@ const { html, raw, chartPage, notFound, csrfField, getPatient, fmtTimestamp } = 
 const router = express.Router();
 const MAX_BYTES = 5 * 1024 * 1024;
 const MAX_PER_PATIENT = 60;
-const UPLOAD_PATH_RE = /^\/ehr\/(patients\/\d+\/photos|scan)\/?$/; // picture uploads and PDF note scans
+const UPLOAD_PATH_RE = /^\/ehr\/(patients\/\d+\/photos|scan|admin\/clinic\/logo)\/?$/; // picture uploads and PDF note scans
 
 const CATEGORIES = [
   { value: "profile", label: "Profile photo (identification)" },

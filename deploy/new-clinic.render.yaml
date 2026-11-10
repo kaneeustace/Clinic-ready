@@ -1,0 +1,42 @@
+# Blueprint for ONE new customer clinic. Each clinic gets its own server, disk and database.
+# In Render: New → Blueprint → this repo → Blueprint path: deploy/new-clinic.render.yaml
+# Before using it for a second clinic, change the service name and disk name below (they must be unique
+# in your Render workspace), e.g. ehr-sunrise → ehr-desertbloom.
+# Real patient data requires a HIPAA-enabled Render workspace with a signed BAA (see docs/selling/launch-a-clinic.md).
+services:
+  - type: web
+    name: ehr-newclinic
+    runtime: node
+    plan: starter
+    rootDir: ehr
+    buildCommand: npm ci --omit=dev
+    startCommand: npm start
+    healthCheckPath: /healthz
+    autoDeploy: true
+    disk:
+      name: ehr-newclinic-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: TRUST_PROXY
+        value: "1"
+      - key: EHR_DB_PATH
+        value: /var/data/ehr.sqlite
+      - key: EHR_TZ
+        value: America/Phoenix
+      - key: EHR_CLINIC_NAME
+        sync: false
+      - key: EHR_ADMIN_EMAIL
+        sync: false
+      - key: EHR_ADMIN_PASSWORD
+        sync: false
+      - key: EHR_OPS_TOKEN
+        generateValue: true
+      - key: EHR_BACKUP_KEY
+        sync: false
+      - key: EHR_BACKUP_DIR
+        value: /var/data/backups
+      - key: EHR_REQUIRE_MFA
+        value: "1"

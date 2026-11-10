@@ -405,7 +405,7 @@ function recordHtml(req, patient, rec) {
     </div>
     <article class="print-sheet">
       <header class="print-head">
-        <div><p class="print-org">Clinic Ready · Behavioral Health</p>
+        <div><p class="print-org">${require("../clinic").getClinic(req.db).name}</p>
           <h1>Designated record set copy</h1>
           <p class="muted">Provided under the HIPAA right of access (45 CFR 164.524)</p></div>
         <dl class="facts print-patient">
@@ -684,7 +684,7 @@ router.get("/patients/:id/disclosures/accounting", requireDisclosureView, (req, 
     </div>
     <article class="print-sheet">
       <header class="print-head">
-        <div><p class="print-org">Clinic Ready · Behavioral Health</p>
+        <div><p class="print-org">${require("../clinic").getClinic(req.db).name}</p>
           <h1>Accounting of disclosures</h1>
           <p class="muted">45 CFR 164.528 · ${fmtDate(since)} to ${fmtDate(t)}</p></div>
         <dl class="facts print-patient">

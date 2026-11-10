@@ -29,6 +29,13 @@ services:
         value: /var/data/ehr.sqlite
       - key: EHR_TZ
         value: America/Phoenix
+      - key: EHR_CLINIC_NAME
+        sync: false
+      # Operator: token for /ops/status, and the list of customer clinics shown under Administration → Customers.
+      - key: EHR_OPS_TOKEN
+        generateValue: true
+      - key: EHR_FLEET
+        sync: false
       - key: EHR_ADMIN_EMAIL
         sync: false
       - key: EHR_ADMIN_PASSWORD

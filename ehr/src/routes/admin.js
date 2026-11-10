@@ -141,6 +141,8 @@ router.get("/admin", adminOnly, (req, res) => {
             <li><a href="/ehr/admin/audit">Audit log</a></li>
             <li><a href="/ehr/admin/audit.csv">Export audit log (CSV)</a></li>
             <li><a href="/ehr/account">My account and password</a></li>
+            <li><a href="/ehr/admin/clinic">Clinic settings (name, logo, NPI, tax ID)</a></li>
+            <li><a href="/ehr/admin/customers">Customers (all clinics you host)</a></li>
             <li><a href="/ehr/admin/email">End-of-day note emails</a></li>
           </ul>
           <p class="muted small">Patient access reports are available from the audit log by filtering on a patient MRN.</p>
@@ -780,4 +782,5 @@ router.post("/account/mfa/recovery-codes", (req, res) => {
     ${mfa.recoveryCodesPanel(codes, "/ehr/account")}` }));
 });
 
-module.exports = { router, csvCell };
+module.exports = {
+  storageStatus, router, csvCell };

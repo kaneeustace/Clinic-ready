@@ -15,6 +15,7 @@ function openDb(file) {
   const schema = fs.readFileSync(path.join(__dirname, "schema.sql"), "utf8");
   db.exec(schema);
   migrate(db, schema);
+  require("./clinic").ensureClinic(db);
   return db;
 }
 

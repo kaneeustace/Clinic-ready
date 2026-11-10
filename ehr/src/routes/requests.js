@@ -136,7 +136,7 @@ const publicRouter = express.Router();
 
 function simplePage(title, message) {
   return "<!doctype html>" + html`<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="robots" content="noindex"><title>${title} · Clinic Ready</title><link rel="stylesheet" href="/assets/css/styles.css"></head>
+<meta name="robots" content="noindex"><title>${title}</title><link rel="stylesheet" href="/assets/css/styles.css"></head>
 <body><main id="main" style="max-width:40rem;margin:3rem auto;padding:0 1rem"><h1>${title}</h1><p>${message}</p>
 <p><a href="/contact.html">Back to the contact page</a></p>
 <p>If this is an emergency, call 911 or go to the nearest emergency room. You can also call or text 988 (Suicide &amp; Crisis Lifeline).</p></main></body></html>`.s;

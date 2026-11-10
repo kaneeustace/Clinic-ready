@@ -1,4 +1,5 @@
 "use strict";
+const { getClinic, brandCss } = require("./clinic");
 /*
  * Server-side HTML helpers.
  *
@@ -161,14 +162,22 @@ function bottomNav(req, user, active) {
     </nav>`;
 }
 
+/** Clinic logo, or the default mark. */
+function brandMark(clinic, cls = "") {
+  return clinic.logoUrl
+    ? html`<img class="brand-logo ${cls}" src="${clinic.logoUrl}" alt="" aria-hidden="true">`
+    : html`<span class="logo-dot ${cls}" aria-hidden="true"></span>`;
+}
+
 function page(req, { title, active = "", body, bare = false }) {
   const user = req.user;
+  const clinic = getClinic(req.db);
   const shell = bare || !user
     ? html`<main id="main" class="bare">${body}</main>`
     : html`
       <div class="app">
         <aside class="sidebar" aria-label="EHR navigation">
-          <a class="sidebar__brand" href="/ehr"><span class="logo-dot" aria-hidden="true"></span><span>Clinic Ready<small>Behavioral Health EHR</small></span></a>
+          <a class="sidebar__brand" href="/ehr">${brandMark(clinic)}<span>${clinic.name}<small>${clinic.tagline}</small></span></a>
           <nav>
             ${["Workspace", "Operations"].map((g) => {
               const items = NAV.filter((n) => n.group === g && (!n.perm || can(user, n.perm)));
@@ -188,7 +197,7 @@ function page(req, { title, active = "", body, bare = false }) {
         </aside>
         <div class="app__main">
           <header class="topbar">
-            <a class="topbar__logo" href="/ehr" aria-label="Clinic Ready home"><span class="logo-dot" aria-hidden="true"></span></a>
+            <a class="topbar__logo" href="/ehr" aria-label="${clinic.name} home">${brandMark(clinic)}</a>
             <form class="topbar__search" method="get" action="/ehr/patients" role="search">
               <label class="visually-hidden" for="global-q">Search patients</label>
               ${icon("M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM21 21l-4.3-4.3")}
@@ -216,22 +225,22 @@ function page(req, { title, active = "", body, bare = false }) {
   <meta name="theme-color" content="#111f3b">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-title" content="Clinic Ready">
+  <meta name="apple-mobile-web-app-title" content="${clinic.name.slice(0, 20)}">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <link rel="manifest" href="/ehr/manifest.webmanifest">
   <link rel="apple-touch-icon" href="/ehr/static/icons/icon-180.png">
   <meta name="robots" content="noindex, nofollow">
-  <title>${title ? `${title} · ` : ""}Clinic Ready EHR</title>
+  <title>${title ? `${title} · ` : ""}${clinic.name}</title>
   <link rel="icon" href="/assets/img/favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/ehr/static/ehr.css?v=11">
+  <link rel="stylesheet" href="/ehr/static/ehr.css?v=13">${brandCss(clinic) ? raw(`<style>${brandCss(clinic)}</style>`) : ""}
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
   ${shell}
-  <script src="/ehr/static/ehr.js?v=12" defer></script>
+  <script src="/ehr/static/ehr.js?v=13" defer></script>
 </body>
 </html>`.s;
 }
@@ -343,6 +352,6 @@ function select(name, options, selected, attrs = "") {
 }
 
 module.exports = {
-  initials, html, raw, esc, SafeHtml, page, chartPage, notFound, csrfField, select, badge, icon, getPatient, patientName,
+  brandMark, initials, html, raw, esc, SafeHtml, page, chartPage, notFound, csrfField, select, badge, icon, getPatient, patientName,
   today, nowLocal, addDays, fmtDate, fmtTime, fmtDateTime, fmtTimestamp, age, money, parseMoney, humanize, TZ,
 };

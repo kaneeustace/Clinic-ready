@@ -186,8 +186,14 @@ test("superbill renders printable statement and is audited", async () => {
   const r = await c.get(`/ehr/patients/${pid}/superbill?from=2026-03-01&to=2026-03-31`);
   assert.equal(r.status, 200);
   assert.match(r.text, /data-print/);
-  assert.match(r.text, /Clinic Ready Behavioral Health/);
-  assert.match(r.text, /123 Placeholder Ave/);
+  assert.match(r.text, /Clinic Ready/);
+  assert.match(r.text, /not set: Administration → Clinic settings/);
+  t.db.prepare("UPDATE clinic_settings SET name = 'Sunrise Counseling', address1 = '1 Main St', city = 'Mesa', state = 'AZ', zip = '85201', phone = '(480) 555-0100', npi = '1234567893', tax_id = '86-1234567' WHERE id = 1").run();
+  const r2 = await c.get(`/ehr/patients/${pid}/superbill?from=2026-03-01&to=2026-03-31`);
+  assert.match(r2.text, /Sunrise Counseling/);
+  assert.match(r2.text, /1 Main St, Mesa, AZ 85201/);
+  assert.match(r2.text, /Group NPI 1234567893 · Tax ID 86-1234567/);
+  assert.doesNotMatch(r2.text, /not set: Administration/);
   assert.match(r.text, /90837/);
   assert.match(r.text, /F33\.1/);
   assert.match(r.text, /Taylor Therapist, LCSW/);

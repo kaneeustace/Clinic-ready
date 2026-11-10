@@ -172,6 +172,12 @@ function requirePerm(...perms) {
 /* ------------------------------------------------------------------ */
 const router = express.Router();
 
+/** Clinic logo and name for sign-in pages. */
+function loginBrand(req) {
+  const c = require("./clinic").getClinic(req.db);
+  return html`${require("./views").brandMark(c)} <span>${c.name}</span>`;
+}
+
 function loginPage(req, { error, email = "" } = {}) {
   const next = typeof req.query.next === "string" && req.query.next.startsWith("/ehr") ? req.query.next : "/ehr";
   return page(req, {
@@ -180,7 +186,7 @@ function loginPage(req, { error, email = "" } = {}) {
     body: html`
       <div class="login">
         <div class="card login__card"><div data-install-hint></div>
-          <div class="login__brand"><span class="logo-dot" aria-hidden="true"></span> Clinic Ready <strong>EHR</strong></div>
+          <div class="login__brand">${loginBrand(req)}</div>
           <h1>Staff sign in</h1>
           ${req.db.prepare("SELECT COUNT(*) AS n FROM users").get().n === 0 ? html`<p class="alert alert--warn" role="status"><strong>Setup isn't finished: no staff accounts exist yet.</strong> <a href="/ehr/setup">Create the administrator account</a>.</p>` : ""}
           ${req.query.expired ? html`<p class="alert alert--info" role="status">You were signed out after a period of inactivity.</p>` : ""}
@@ -220,11 +226,12 @@ function setupPage(req, { errors = {}, values = {} } = {}) {
     body: html`
       <div class="login">
         <div class="card login__card">
-          <div class="login__brand"><span class="logo-dot" aria-hidden="true"></span> Clinic Ready <strong>EHR</strong></div>
-          <h1>Create the administrator account</h1>
-          <p class="muted">This page works once, while no accounts exist. Afterwards, add staff from Admin → Users.</p>
+          <div class="login__brand">${loginBrand(req)}</div>
+          <h1>Set up your clinic</h1>
+          <p class="muted">Name your clinic and create the first administrator account. This page works once, while no accounts exist. Afterwards, add staff from Admin → Users.</p>
           ${errors._ ? html`<p class="alert alert--error" role="alert">${errors._}</p>` : ""}
           <form method="post" action="/ehr/setup" class="stack">
+            <label>Clinic name <input name="clinic_name" value="${values.clinic_name ?? require("./clinic").getClinic(req.db).name}" maxlength="120" autocomplete="organization">${err("clinic_name")}</label>
             <label>Your name <input name="name" value="${values.name || ""}" autocomplete="name" required>${err("name")}</label>
             <label>Email <input type="email" name="email" value="${values.email || ""}" autocomplete="username" required>${err("email")}</label>
             <label>Password <input type="password" name="password" autocomplete="new-password" required>
@@ -258,10 +265,12 @@ router.post("/setup", (req, res) => {
   const values = {
     name: String(req.body.name || "").trim().slice(0, 100),
     email: String(req.body.email || "").trim().slice(0, 200),
+    clinic_name: req.body.clinic_name === undefined ? undefined : String(req.body.clinic_name).trim().slice(0, 120),
   };
   const password = String(req.body.password || "");
   const errors = {};
   if (!values.name) errors.name = "Enter your name.";
+  if (values.clinic_name !== undefined && !values.clinic_name) errors.clinic_name = "Enter the clinic's name.";
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(values.email)) errors.email = "Enter a valid email address.";
   const pwErr = passwordPolicyError(password);
   if (pwErr) errors.password = pwErr;
@@ -274,6 +283,7 @@ router.post("/setup", (req, res) => {
     if (!noUsers(req.db)) { req.db.exec("ROLLBACK"); return res.redirect("/ehr/login"); }
     userId = Number(req.db.prepare("INSERT INTO users (email, name, role, password_hash, last_login_at, password_changed_at) VALUES (?, ?, 'admin', ?, datetime('now'), datetime('now'))")
       .run(values.email, values.name, hashPassword(password)).lastInsertRowid);
+    if (values.clinic_name) req.db.prepare("UPDATE clinic_settings SET name = ?, updated_by = ?, updated_at = datetime('now') WHERE id = 1").run(values.clinic_name, userId);
     req.db.exec("COMMIT");
   } catch (e) {
     req.db.exec("ROLLBACK");
@@ -499,7 +509,7 @@ function mfaPage(req, { error, next = "/ehr" } = {}) {
     body: html`
       <div class="login">
         <div class="card login__card">
-          <div class="login__brand"><span class="logo-dot" aria-hidden="true"></span> Clinic Ready <strong>EHR</strong></div>
+          <div class="login__brand">${loginBrand(req)}</div>
           <h1>Two-factor verification</h1>
           <p class="muted">Enter the 6-digit code from your authenticator app.</p>
           ${error ? html`<p class="alert alert--error" role="alert">${error}</p>` : ""}
@@ -576,7 +586,7 @@ function forcedEnrollPage(req, user, errors = []) {
     bare: true,
     body: html`
       <div class="login"><div class="login__card" style="max-width:40rem">
-        <div class="login__brand"><span class="logo-dot" aria-hidden="true"></span> Clinic Ready <strong>EHR</strong></div>
+        <div class="login__brand">${loginBrand(req)}</div>
         <p class="alert alert--info" role="status">Your organization requires two-factor sign-in. Set it up to continue.</p>
         ${mfaEnrollmentPanel(req, { email: user.email, secret, action: "/ehr/login/mfa/setup", errors })}
         <form method="post" action="/ehr/logout">${csrfField(req)}<button class="btn btn--ghost btn--sm" type="submit">Cancel and sign out</button></form>

@@ -85,7 +85,7 @@ router.post("/admin/email/test", adminOnly, async (req, res) => {
   const u = req.db.prepare("SELECT * FROM users WHERE id = ?").get(req.user.id);
   const sample = { write: 2, sign: 1, cosign: can(u, "clinical:write") ? 1 : 0, awaiting: 0, overdue: 1, dueSoon: 2, oldestOverdueHours: 30 };
   sample.total = sample.write + sample.sign + sample.cosign;
-  const mail = digest.composeEmail(u, sample);
+  const mail = digest.composeEmail(u, sample, digest.digestConfig(), require("../clinic").getClinic(req.db).name);
   try {
     await mailer.sendMail({ to: u.email, ...mail, subject: `[Sample] ${mail.subject}` });
     audit(req, "email_test", "user", u.id, null, "sent");

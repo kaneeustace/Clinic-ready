@@ -184,13 +184,12 @@ function ahcccsBillErrors(db, charge, patient) {
   return errors.concat(ahcccsDocumentationErrors(db, patient, charge.date_of_service));
 }
 
-const PRACTICE = {
-  name: "Clinic Ready Behavioral Health",
-  address: "123 Placeholder Ave, Suite 100, Your City, ST 00000",
-  phone: "(555) 010-0000",
-  npi: "[placeholder]",
-  taxId: "[placeholder]",
-};
+/** Practice details for superbills, from Administration → Clinic settings. */
+function practice(db) {
+  const c = require("../clinic").getClinic(db);
+  const missing = "[not set: Administration → Clinic settings]";
+  return { name: c.name, address: c.address || missing, phone: c.phone || missing, npi: c.npi || missing, taxId: c.tax_id || missing, ready: c.billingReady };
+}
 
 /* ---------------- helpers ---------------- */
 function validDate(s) {
@@ -803,6 +802,7 @@ router.post("/charges/:chargeId/status", write, (req, res) => {
 /* ---------------- superbill ---------------- */
 router.get("/patients/:id/superbill", read, (req, res) => {
   const db = req.db;
+  const PRACTICE = practice(db);
   const patient = loadPatient(req, res);
   if (!patient) return;
   let from = validDate(req.query.from) ? req.query.from : addDays(today(), -30);
@@ -842,7 +842,7 @@ router.get("/patients/:id/superbill", read, (req, res) => {
       <article class="card superbill">
         <header class="row" style="justify-content:space-between;align-items:flex-start">
           <div>
-            <h1 style="margin:0">${PRACTICE.name}</h1>
+            <h1 style="margin:0">${PRACTICE.name}</h1>${PRACTICE.ready ? "" : html`<p class="alert alert--warn no-print">Add the clinic's address, NPI and tax ID under <a href="/ehr/admin/clinic">Administration → Clinic settings</a> before giving superbills to clients.</p>`}
             <p class="small" style="margin:.25rem 0 0">${PRACTICE.address}<br>Phone ${PRACTICE.phone}<br>Group NPI ${PRACTICE.npi} · Tax ID ${PRACTICE.taxId}</p>
           </div>
           <div style="text-align:right">

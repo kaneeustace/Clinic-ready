@@ -61,14 +61,14 @@ function summarize(db, user, now = Date.now()) {
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 const escHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-function composeEmail(user, s, cfg = digestConfig()) {
+function composeEmail(user, s, cfg = digestConfig(), clinicName = "Clinic Ready") {
   const first = String(user.name || "").split(" ")[0] || "there";
   const link = cfg.url ? `${cfg.url}/ehr` : "";
   const lines = [];
   if (s.write) lines.push(`${plural(s.write, "session needs", "sessions need")} a note written`);
   if (s.sign) lines.push(`${plural(s.sign, "draft note is", "draft notes are")} waiting for your signature`);
   if (s.cosign) lines.push(`${plural(s.cosign, "supervisee note needs", "supervisee notes need")} your co-signature`);
-  const subject = `${plural(s.total, "note", "notes")} outstanding${s.overdue ? ` (${s.overdue} overdue)` : ""} · Clinic Ready`;
+  const subject = `${plural(s.total, "note", "notes")} outstanding${s.overdue ? ` (${s.overdue} overdue)` : ""} · ${clinicName}`;
   const overdueLine = s.overdue
     ? `${plural(s.overdue, "item is", "items are")} past the deadline${s.oldestOverdueHours >= 1 ? ` (the oldest by ${s.oldestOverdueHours >= 48 ? `${Math.floor(s.oldestOverdueHours / 24)} days` : `${s.oldestOverdueHours} hours`})` : ""}.`
     : "";
@@ -86,7 +86,7 @@ function composeEmail(user, s, cfg = digestConfig()) {
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f5fa;padding:24px 12px"><tr><td align="center">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;background:#fff;border-radius:16px;overflow:hidden;border:1px solid #e3e8ef">
 <tr><td style="background:linear-gradient(120deg,#1b2f63,#2c4fd0 55%,#149c96);background-color:#2c4fd0;padding:22px 24px;color:#fff">
-<div style="font-size:12px;letter-spacing:.12em;text-transform:uppercase;opacity:.8">Clinic Ready · end of day</div>
+<div style="font-size:12px;letter-spacing:.12em;text-transform:uppercase;opacity:.8">${escHtml(clinicName)} · end of day</div>
 <div style="font-size:22px;font-weight:700;margin-top:4px">${escHtml(plural(s.total, "note", "notes"))} outstanding</div></td></tr>
 <tr><td style="padding:22px 24px;font-size:15px;line-height:1.55">
 <p style="margin:0 0 12px">Hi ${escHtml(first)}, before you leave today:</p>
@@ -125,7 +125,7 @@ async function runDigest(db, { date = nowLocal().slice(0, 10), force = false, on
     if (!force && prior && prior.status === "sent") { out.skipped++; continue; }
     const s = summarize(db, u);
     if (!s.total) { log.run(u.id, date, "nothing", null); out.skipped++; out.results.push({ userId: u.id, status: "nothing" }); continue; }
-    const mail = composeEmail(u, s, cfg);
+    const mail = composeEmail(u, s, cfg, require("./clinic").getClinic(db).name);
     try {
       await mailer.sendMail({ to: u.email, ...mail }, mailCfg);
       log.run(u.id, date, "sent", `${s.total} outstanding, ${s.overdue} overdue`);

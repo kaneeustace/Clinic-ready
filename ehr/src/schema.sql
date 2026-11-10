@@ -489,3 +489,17 @@ CREATE TABLE IF NOT EXISTS digest_runs (
   finished_at TEXT,
   sent INTEGER, skipped INTEGER, failed INTEGER
 );
+
+-- Clinic (practice) identity and branding. Exactly one row (id = 1). See src/clinic.js.
+CREATE TABLE IF NOT EXISTS clinic_settings (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  name TEXT NOT NULL,
+  tagline TEXT,
+  address1 TEXT, address2 TEXT, city TEXT, state TEXT, zip TEXT,
+  phone TEXT, fax TEXT, email TEXT, website TEXT,
+  npi TEXT, tax_id TEXT, taxonomy TEXT,
+  color TEXT NOT NULL DEFAULT 'blue',
+  logo BLOB, logo_mime TEXT,
+  updated_by INTEGER REFERENCES users(id),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);

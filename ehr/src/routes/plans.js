@@ -2024,7 +2024,7 @@ router.get("/treatment-plans/:planId/print", READ, (req, res) => {
     </div>
     <article class="print-sheet">
       <header class="print-head">
-        <div><p class="print-org">Clinic Ready · Behavioral Health</p>
+        <div><p class="print-org">${require("../clinic").getClinic(req.db).name}</p>
           <h1>${ahcccs ? "Service Plan (AHCCCS)" : "Treatment plan"}</h1>
           <p class="muted">Version ${plan.version} · ${humanize(plan.status)} · ${PLAN_TYPE_LABEL[plan.plan_type] || humanize(plan.plan_type)}</p></div>
         <dl class="facts print-patient">

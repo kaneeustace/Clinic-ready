@@ -63,12 +63,13 @@
       if (!f) return;
       say("Preparing picture…");
       busy = load(f).then(function (img) {
-        var w = img.width, h = img.height, max = 1600, k = Math.min(1, max / Math.max(w, h));
+        var png = form.getAttribute("data-format") === "png";
+        var w = img.width, h = img.height, max = Number(form.getAttribute("data-max")) || 1600, k = Math.min(1, max / Math.max(w, h));
         var c = document.createElement("canvas");
         c.width = Math.round(w * k); c.height = Math.round(h * k);
-        var ctx = c.getContext("2d"); ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, c.width, c.height);
+        var ctx = c.getContext("2d"); if (!png) { ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, c.width, c.height); }
         ctx.drawImage(img, 0, 0, c.width, c.height);
-        out.value = c.toDataURL("image/jpeg", 0.85);
+        out.value = png ? c.toDataURL("image/png") : c.toDataURL("image/jpeg", 0.85);
         if (preview) { preview.src = out.value; preview.hidden = false; }
         say("Ready to upload.");
       }).catch(function () { say("That file couldn't be read as a picture. Try a JPEG or PNG."); })
