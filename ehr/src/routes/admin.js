@@ -179,7 +179,10 @@ function storageStatus(db) {
   } catch { /* in-memory or unreadable */ }
   persistent = !!file && separateMount;
   const onRender = !!process.env.RENDER;
-  return { file, persistent, onRender, sizeKb: file ? Math.round((fs.existsSync(file) ? fs.statSync(file).size : 0) / 1024) : 0 };
+  const size = (f) => { try { return fs.statSync(f).size; } catch { return 0; } };
+  let created = null;
+  try { created = fs.statSync(file).birthtime.toISOString(); } catch { created = null; }
+  return { file, persistent, onRender, sizeKb: Math.round((size(file) + size(file + "-wal")) / 1024), created };
 }
 function storageCard(req) {
   const st = storageStatus(req.db);
@@ -187,7 +190,8 @@ function storageCard(req) {
     <section class="card" id="storage">
       <div class="card__head"><h2>Data storage</h2>${st.persistent ? html`<span class="badge badge--good">Saved permanently</span>` : html`<span class="badge badge--bad">Erased on restart</span>`}</div>
       ${st.persistent
-        ? html`<p>The database is on a persistent disk (${st.file}, ${st.sizeKb} KB). Updates and restarts keep your data.</p>`
+        ? html`<p>The database is on a persistent disk (${st.file}, ${st.sizeKb} KB). Updates and restarts keep your data.</p>
+          ${st.created ? html`<p class="small muted">Database created ${st.created.slice(0, 16).replace("T", " ")} UTC. If this changes after an update, the disk was replaced.</p>` : ""}`
         : html`<p>The database is on temporary storage${st.file ? ` (${st.file})` : ""}. <strong>Everything is erased each time the app updates or restarts.</strong></p>
           ${st.onRender ? html`<p class="small">Fix in Render: upgrade the <strong>clinic-ready</strong> service to the Starter plan, add a disk at <code>/var/data</code>, and set <code>EHR_DB_PATH=/var/data/ehr.sqlite</code>.</p>` : ""}`}
     </section>`;

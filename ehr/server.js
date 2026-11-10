@@ -17,7 +17,31 @@ const guard = require("./src/disk-guard");
 })();
 
 function main() {
+  const fs = require("node:fs");
+  const sizeOf = (f) => { try { return fs.statSync(f).size; } catch { return 0; } };
+  const existed = fs.existsSync(DB_PATH);
+  console.log(`[db] ${DB_PATH}: ${existed ? `existing database, ${Math.round(sizeOf(DB_PATH) / 1024)} KB + ${Math.round(sizeOf(DB_PATH + "-wal") / 1024)} KB journal` : "NO DATABASE FOUND, creating a new empty one"}`);
   const db = openDb(DB_PATH);
+  try {
+    const n = (sql) => db.prepare(sql).get().n;
+    console.log(`[db] ${n("SELECT COUNT(*) AS n FROM users")} users, ${n("SELECT COUNT(*) AS n FROM patients")} patients, ${n("SELECT COUNT(*) AS n FROM notes")} notes`);
+  } catch { /* first start */ }
+
+  // Fold the write-ahead journal into the main file every 5 minutes and on shutdown, so a stop during a deploy
+  // never leaves recent changes only in the journal.
+  const checkpoint = () => { try { db.exec("PRAGMA wal_checkpoint(TRUNCATE)"); } catch (e) { console.error("[db] checkpoint failed:", e.message); } };
+  setInterval(checkpoint, 5 * 60e3).unref();
+  let closing = false;
+  for (const sig of ["SIGTERM", "SIGINT"]) {
+    process.on(sig, () => {
+      if (closing) return;
+      closing = true;
+      console.log(`[db] ${sig}: saving and closing the database`);
+      checkpoint();
+      try { db.close(); } catch { /* already closed */ }
+      process.exit(0);
+    });
+  }
   require("./src/bootstrap").bootstrap(db);
 
   // Purge expired sessions hourly.
