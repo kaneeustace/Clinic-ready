@@ -429,3 +429,46 @@ CREATE TABLE IF NOT EXISTS patient_images (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_patient_images_patient ON patient_images(patient_id, created_at);
+
+-- Level of care: episodes (one open episode per patient = current level) and payer authorizations / utilization review.
+CREATE TABLE IF NOT EXISTS loc_episodes (
+  id INTEGER PRIMARY KEY,
+  patient_id INTEGER NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
+  level TEXT NOT NULL,
+  asam_level TEXT,
+  program TEXT,
+  start_date TEXT NOT NULL,
+  end_date TEXT,
+  reason TEXT,
+  end_reason TEXT,
+  end_note TEXT,
+  created_by INTEGER REFERENCES users(id),
+  ended_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_loc_episodes_patient ON loc_episodes(patient_id, start_date);
+CREATE INDEX IF NOT EXISTS idx_loc_episodes_open ON loc_episodes(end_date, level);
+
+CREATE TABLE IF NOT EXISTS loc_authorizations (
+  id INTEGER PRIMARY KEY,
+  patient_id INTEGER NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
+  episode_id INTEGER REFERENCES loc_episodes(id) ON DELETE SET NULL,
+  level TEXT NOT NULL,
+  payer TEXT,
+  auth_number TEXT,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('requested','pending','approved','denied','expired','closed')),
+  unit_type TEXT NOT NULL DEFAULT 'days' CHECK (unit_type IN ('days','sessions','units')),
+  units_approved INTEGER,
+  units_used INTEGER,
+  start_date TEXT,
+  end_date TEXT,
+  next_review_date TEXT,
+  reviewer TEXT,
+  notes TEXT,
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_loc_auth_patient ON loc_authorizations(patient_id, start_date);
+CREATE INDEX IF NOT EXISTS idx_loc_auth_review ON loc_authorizations(status, next_review_date);

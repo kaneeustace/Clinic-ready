@@ -66,6 +66,7 @@ The crisis bar, header and footer are copied into every page. If you change one,
   - Signing requires re-entering your password, and signed notes can't be changed; corrections go in addenda.
 - **Treatment plans:** problems, goals, objectives and interventions, with draft → active → superseded/completed and review dates.
 - **Patient pictures:** a Pictures tab on every chart for a profile photo (shown in the chart banner for identification), photo ID, insurance cards and other images. Pictures are resized and stripped of location data in the browser, stored in the encrypted-backup database, served only to signed-in staff, and every view/upload/delete is audited.
+- **Level of care & census:** each chart has a Level of care tab (current level with ASAM level and program, step-up/step-down history with reasons, discharge, and payer authorizations with days/sessions used, next utilization review and expiry alerts). The current level shows in the chart banner. The Census page shows who is at each level on any date, admissions/discharges, and reviews due; the dashboard lists reviews due in the next 3 days. A signed ASAM assessment that recommends a different level is flagged.
 - **Measurement-based care:**
   - PHQ-9 and GAD-7 with exact scoring and severity bands.
   - Trend charts with response/remission indicators.

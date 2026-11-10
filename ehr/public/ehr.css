@@ -409,3 +409,24 @@ dl.facts.plan-facts { grid-template-columns: minmax(110px, 34%) minmax(0, 1fr); 
 .photo-card form { display: inline; }
 @media (max-width: 600px) { .chart-head > .avatar--photo { display: block; width: 56px; height: 56px; } }
 @media print { .photo-card form { display: none; } }
+
+/* ---------- Level of care & census ---------- */
+.pill--loc { background: #e8efff; color: var(--primary-dark); border-color: #c9d8fb; }
+.loc-now__level { font-size: 1.35rem; font-weight: 700; color: var(--text); }
+.loc-now__why { margin: .5rem 0 0; }
+.loc-action { margin-top: 1rem; }
+.loc-action > summary { list-style: none; cursor: pointer; display: inline-flex; }
+.loc-action > summary::-webkit-details-marker { display: none; }
+.loc-action[open] > summary { margin-bottom: .75rem; }
+.loc-current .loc-action { display: inline-block; margin-right: .5rem; vertical-align: top; }
+.loc-current .loc-action[open] { display: block; }
+.loc-timeline { list-style: none; margin: 0; padding: 0 0 0 1.1rem; border-left: 2px solid var(--border); display: grid; gap: 1rem; }
+.loc-timeline li { position: relative; }
+.loc-timeline li::before { content: ""; position: absolute; left: calc(-1.1rem - 6px); top: .35rem; width: 10px; height: 10px; border-radius: 50%; background: var(--border-strong); }
+.loc-timeline li.is-current::before { background: var(--primary, #2f5bea); }
+.loc-timeline p { margin: .25rem 0 0; }
+.loc-edit summary, .loc-auth-edit summary { cursor: pointer; color: var(--muted); }
+.loc-auth-edit td { padding-top: 0; }
+.tile--active { outline: 2px solid var(--primary, #2f5bea); }
+.grid-2 { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+.tiles.loc-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: .75rem; }

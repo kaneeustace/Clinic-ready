@@ -118,6 +118,7 @@ const NAV = [
   { group: "Workspace", key: "dashboard", href: "/ehr", label: "Dashboard", perm: null, icon: "M4 13h6V4H4zM14 20h6v-9h-6zM4 20h6v-3H4zM14 7h6V4h-6z" },
   { group: "Workspace", key: "patients", href: "/ehr/patients", label: "Patients", perm: "patients:read", icon: "M16 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0M4 21c0-4 3.6-6 8-6s8 2 8 6" },
   { group: "Workspace", key: "schedule", href: "/ehr/schedule", label: "Schedule", perm: "schedule:read", icon: "M4 6h16v14H4zM4 10h16M9 3v4M15 3v4" },
+  { group: "Workspace", key: "census", href: "/ehr/census", label: "Census", perm: "patients:read", icon: "M4 20V10M10 20V4M16 20v-7M22 20H2" },
   { group: "Workspace", key: "notes", href: "/ehr/notes", label: "My notes", perm: "clinical:write", icon: "M6 3h9l4 4v14H6zM9 12h7M9 16h5" },
   { group: "Operations", key: "requests", href: "/ehr/requests", label: "Intake requests", perm: "requests:manage", icon: "M4 6h16v12H4zM4 7l8 6 8-6" },
   { group: "Operations", key: "billing", href: "/ehr/billing", label: "Billing", perm: "billing:read", icon: "M3 6h18v12H3zM3 10h18M7 15h4" },
@@ -194,7 +195,7 @@ function page(req, { title, active = "", body, bare = false }) {
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/ehr/static/ehr.css?v=8">
+  <link rel="stylesheet" href="/ehr/static/ehr.css?v=9">
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
@@ -212,6 +213,7 @@ const CHART_TABS = [
   { key: "plan", label: "Treatment plan", path: "/treatment-plan", perm: "clinical:read" },
   { key: "measures", label: "Measures", path: "/measures", perm: "clinical:read" },
   { key: "billing", label: "Billing", path: "/billing", perm: "billing:read" },
+  { key: "loc", label: "Level of care", path: "/level-of-care", perm: "patients:read" },
   { key: "photos", label: "Pictures", path: "/photos", perm: "patients:read" },
 ];
 
@@ -279,6 +281,7 @@ function chartPage(req, patient, tab, body, { title } = {}) {
             : html`<span class="pill">NKA (no known allergies)</span>`}
           ${flagged ? html`<span class="pill pill--bad">Safety flag: positive suicide risk screen in last 30 days</span>` : ""}
           ${planPill}
+          ${require("./routes/loc").bannerPill(req.db, req.user, patient)}
         </div>
       </div>
       <div class="chart-head__actions">

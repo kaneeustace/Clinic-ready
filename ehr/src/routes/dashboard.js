@@ -2,6 +2,7 @@
 const express = require("express");
 const { can } = require("../permissions");
 const { buildWorkboard, renderWorkboard } = require("../workboard");
+const { urDue, authAlerts, LEVELS } = require("./loc");
 const { html, page, badge, fmtTime, fmtDate, today, addDays, nowLocal, patientName, humanize } = require("../views");
 
 const router = express.Router();
@@ -35,6 +36,9 @@ router.get("/", (req, res) => {
      ${mineOnly ? "AND (p.primary_clinician_id = ? OR tp.author_id = ?)" : ""}
      ORDER BY tp.review_date, p.last_name LIMIT 25`).all(addDays(t, 7), ...(mineOnly ? [u.id, u.id] : [])) : null;
 
+  // Utilization reviews / authorizations needing action in the next 3 days (UR staff, clinicians for their own clients).
+  const ur = can(u, "clinical:write") || can(u, "billing:write") ? urDue(db, { days: 3, clinicianId: mineOnly ? u.id : null }) : [];
+
   const tile = (label, value, href) => value === null ? "" : html`
     <a class="tile" href="${href}"><span class="tile__num">${value}</span><span class="tile__label">${label}</span></a>`;
 
@@ -55,6 +59,13 @@ router.get("/", (req, res) => {
           <h2>Safety follow-up</h2>
           <p class="muted">A suicide risk screen (PHQ-9 item 9 or C-SSRS) was positive in the last 14 days. Make sure a risk assessment and safety plan are documented.</p>
           <ul class="list">${flags.map((f) => html`<li><a href="/ehr/patients/${f.patient_id}/measures">${patientName(f)}</a> · ${f.instrument === "CSSRS" ? `C-SSRS ${f.severity}` : `PHQ-9 ${f.total_score}, item 9 endorsed`} on ${f.administered_on}</li>`)}</ul>
+        </section>` : ""}
+      ${ur.length ? html`
+        <section class="card card--alert" aria-labelledby="ur-due">
+          <div class="card__head"><h2 id="ur-due">Utilization reviews due</h2><a class="btn btn--sm" href="/ehr/census">Open census</a></div>
+          <ul class="list-plain">${ur.map((a) => html`<li class="row"><a href="/ehr/patients/${a.patient_id}/level-of-care#authorizations">${patientName(a)}</a>
+            <span class="muted small">${(LEVELS.find((l) => l.value === a.level) || { short: a.level }).short}${a.payer ? ` · ${a.payer}` : ""}</span>
+            ${authAlerts(db, a, t).map((x) => html`<span class="badge badge--${x.tone}">${x.text}</span>`)}</li>`)}</ul>
         </section>` : ""}
       ${duePlans ? html`
         <section class="card" aria-labelledby="due-plans">
