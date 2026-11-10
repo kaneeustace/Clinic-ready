@@ -333,11 +333,51 @@ function aiConfigured() {
   return process.env.EHR_AI_REVIEW === "1" && !!(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
 }
 
-async function aiReview(ctx) {
+function makeClient(timeout = 120_000) {
   // Personal Console keys (sk-ant-usr-...) that span several workspaces must name one.
   const workspace = process.env.ANTHROPIC_WORKSPACE_ID;
-  const client = clientOverride || new Anthropic({ timeout: 120_000, maxRetries: 2,
+  return clientOverride || new Anthropic({ timeout, maxRetries: 2,
     ...(workspace ? { defaultHeaders: { "anthropic-workspace-id": workspace } } : {}) });
+}
+
+/** Plain-language reason an API call failed (no secrets). */
+function explainError(err) {
+  const status = err && err.status;
+  const msg = String((err && err.message) || "");
+  return /credit balance/i.test(msg) ? "The Anthropic account has no API credits. Add credits under Settings → Billing in the Claude Console."
+    : /workspace/i.test(msg) ? "The API key needs a workspace. Set ANTHROPIC_WORKSPACE_ID in the hosting settings."
+    : status === 429 ? "The AI reviewer is busy (rate limited). Try again in a minute."
+    : status === 401 || status === 403 ? "The AI reviewer isn't authorized. Check the Anthropic API key in the hosting settings."
+    : status === 404 ? "The AI model wasn't found for this API key. Check that the key's workspace has access to the model."
+    : "The AI reviewer couldn't be reached.";
+}
+
+/** Status for the admin page: what's configured, without revealing secrets. */
+function aiStatus(env = process.env) {
+  const key = env.ANTHROPIC_API_KEY || env.ANTHROPIC_AUTH_TOKEN || "";
+  return { flag: env.EHR_AI_REVIEW === "1", hasKey: !!key, keyKind: key.startsWith("sk-ant-usr-") ? "personal Console key" : key.startsWith("sk-ant-api") ? "API key" : key ? "key" : "",
+    workspace: !!env.ANTHROPIC_WORKSPACE_ID, enabled: aiConfigured(), model: MODEL };
+}
+
+/** Tiny round trip with no patient data, to prove the key, credits and network work. */
+async function testConnection() {
+  if (!aiConfigured()) return { ok: false, error: "AI review is off (needs EHR_AI_REVIEW=1 and ANTHROPIC_API_KEY)." };
+  const started = Date.now();
+  try {
+    const r = await makeClient(30_000).beta.messages.create({
+      model: MODEL, max_tokens: 16, betas: ["server-side-fallback-2026-07-01"], fallbacks: "default",
+      messages: [{ role: "user", content: "Connection test. Reply with the single word OK." }],
+    });
+    const text = (r.content || []).filter((b) => b.type === "text").map((b) => b.text).join("").trim();
+    return { ok: true, model: r.model, reply: text.slice(0, 40), ms: Date.now() - started };
+  } catch (err) {
+    console.error("AI connection test failed:", err && err.status, err && err.message);
+    return { ok: false, error: explainError(err), status: err && err.status };
+  }
+}
+
+async function aiReview(ctx) {
+  const client = makeClient();
   const response = await client.beta.messages.create({
     model: MODEL,
     max_tokens: 16000,
@@ -369,17 +409,12 @@ async function reviewNote(db, note) {
     try {
       ai = await aiReview(ctx);
     } catch (err) {
-      const status = err && err.status;
-      const msg = String((err && err.message) || "");
-      ai = { ok: false, error: /credit balance/i.test(msg) ? "The Anthropic account has no API credits. Add credits under Settings → Billing in the Claude Console."
-        : /workspace/i.test(msg) ? "The API key needs a workspace. Set ANTHROPIC_WORKSPACE_ID in the hosting settings."
-        : status === 429 ? "The AI reviewer is busy (rate limited). Try again in a minute."
-        : status === 401 || status === 403 ? "The AI reviewer isn't authorized. Check the Anthropic API key in the hosting settings."
-        : "The AI reviewer couldn't be reached. The rule-based checks above still apply." };
-      console.error("AI note review failed:", status || "", err && err.message);
+      const e = explainError(err);
+      ai = { ok: false, error: e === "The AI reviewer couldn't be reached." ? `${e} The rule-based checks above still apply.` : e };
+      console.error("AI note review failed:", (err && err.status) || "", err && err.message);
     }
   }
   return { rules, ai, ctx };
 }
 
-module.exports = { reviewNote, ruleChecks, ahcccsChecks, buildContext, aiConfigured, setClient, FINDINGS_SCHEMA, CPT_TIME, MODEL, AHCCCS_PROMPT };
+module.exports = { reviewNote, testConnection, aiStatus, explainError, ruleChecks, ahcccsChecks, buildContext, aiConfigured, setClient, FINDINGS_SCHEMA, CPT_TIME, MODEL, AHCCCS_PROMPT };

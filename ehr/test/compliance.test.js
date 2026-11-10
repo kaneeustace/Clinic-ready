@@ -103,3 +103,21 @@ test("front desk and billing cannot run compliance checks", async () => {
     assert.equal(r.status, 403, role);
   }
 });
+
+test("admin AI status card and connection test (no patient data sent)", async () => {
+  const ai = require("../src/ai-review");
+  let sentBody = null;
+  ai.setClient({ beta: { messages: { create: async (b) => { sentBody = b; return { model: "claude-test", content: [{ type: "text", text: "OK" }] }; } } } });
+  try {
+    const admin = await t.login("admin");
+    assert.match((await admin.get("/ehr/admin")).text, /AI note review/);
+    const r = await admin.post("/ehr/admin/ai-test", {});
+    assert.equal(r.status, 200);
+    assert.match(r.text, /Working\. claude-test answered/);
+    assert.match(JSON.stringify(sentBody.messages), /Connection test/);
+    ai.setClient({ beta: { messages: { create: async () => { const e = new Error("Your credit balance is too low"); e.status = 400; throw e; } } } });
+    const bad = await admin.post("/ehr/admin/ai-test", {});
+    assert.equal(bad.status, 502);
+    assert.match(bad.text, /no API credits/);
+  } finally { ai.setClient(null); }
+});

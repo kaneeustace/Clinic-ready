@@ -131,6 +131,7 @@ router.get("/admin", adminOnly, (req, res) => {
             <tbody>${ROLES.map((r) => html`<tr><td>${humanize(r)}</td><td>${byRole[r].active}</td><td>${byRole[r].inactive}</td></tr>`)}</tbody>
           </table>
         </section>
+        ${aiCard(req)}
         <section class="card">
           <h2>Security</h2>
           <ul class="list">
@@ -145,6 +146,38 @@ router.get("/admin", adminOnly, (req, res) => {
         </section>
       </div>`,
   }));
+});
+
+/* ------------------------------------------------------------------ */
+/* AI note review status + connection test (no patient data is sent)  */
+/* ------------------------------------------------------------------ */
+function aiCard(req, result = null) {
+  const ai = require("../ai-review");
+  const st = ai.aiStatus();
+  const row = (ok, label) => html`<li class="row"><span class="badge badge--${ok ? "good" : "bad"}">${ok ? "Yes" : "No"}</span> ${label}</li>`;
+  return html`
+    <section class="card" id="ai">
+      <div class="card__head"><h2>AI note review</h2>${st.enabled ? html`<span class="badge badge--good">On</span>` : html`<span class="badge badge--muted">Off</span>`}</div>
+      <ul class="list-plain">
+        ${row(st.flag, html`Turned on (<code>EHR_AI_REVIEW=1</code>)`)}
+        ${row(st.hasKey, html`Anthropic key set (<code>ANTHROPIC_API_KEY</code>)${st.keyKind ? ` · ${st.keyKind}` : ""}`)}
+        <li class="row"><span class="badge badge--muted">${st.workspace ? "Set" : "Not set"}</span> Workspace ID (only needed for some personal keys)</li>
+      </ul>
+      ${result ? (result.ok
+        ? html`<div class="alert alert--success" role="status" style="margin-top:1rem">Working. ${result.model} answered "${result.reply}" in ${(result.ms / 1000).toFixed(1)} s.</div>`
+        : html`<div class="alert alert--error" role="alert" style="margin-top:1rem">Not working: ${result.error}${result.status ? ` (HTTP ${result.status})` : ""}</div>`) : ""}
+      ${st.enabled ? html`<form method="post" action="/ehr/admin/ai-test" style="margin-top:1rem">${csrfField(req)}<button class="btn btn--sm" type="submit">Test connection</button>
+        <span class="hint">Sends a one-line test message with no patient information.</span></form>`
+        : html`<p class="hint" style="margin-top:1rem">To turn it on, add <code>EHR_AI_REVIEW=1</code> and <code>ANTHROPIC_API_KEY</code> in the hosting settings, after signing a BAA with Anthropic.</p>`}
+    </section>`;
+}
+
+router.post("/admin/ai-test", adminOnly, async (req, res) => {
+  const result = await require("../ai-review").testConnection();
+  audit(req, "ai_test", null, null, null, result.ok ? "ok" : `failed${result.status ? ` ${result.status}` : ""}`);
+  res.status(result.ok ? 200 : 502).send(page(req, { title: "AI connection test", active: "admin", body: html`
+    <div class="page-head"><h1>AI connection test</h1><a class="btn btn--sm" href="/ehr/admin">Back to administration</a></div>
+    ${aiCard(req, result)}` }));
 });
 
 /* ------------------------------------------------------------------ */
