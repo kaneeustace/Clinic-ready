@@ -472,3 +472,20 @@ CREATE TABLE IF NOT EXISTS loc_authorizations (
 );
 CREATE INDEX IF NOT EXISTS idx_loc_auth_patient ON loc_authorizations(patient_id, start_date);
 CREATE INDEX IF NOT EXISTS idx_loc_auth_review ON loc_authorizations(status, next_review_date);
+
+-- End-of-day outstanding-notes emails (src/digest.js). One row per user per day; runs record the scheduler.
+CREATE TABLE IF NOT EXISTS digest_log (
+  id INTEGER PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  run_date TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('sent','nothing','failed')),
+  detail TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (user_id, run_date)
+);
+CREATE TABLE IF NOT EXISTS digest_runs (
+  run_date TEXT PRIMARY KEY,
+  started_at TEXT NOT NULL DEFAULT (datetime('now')),
+  finished_at TEXT,
+  sent INTEGER, skipped INTEGER, failed INTEGER
+);

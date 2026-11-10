@@ -50,6 +50,26 @@ services:
         sync: false
       - key: EHR_BACKUP_DIR
         value: /var/data/backups
+      # End-of-day outstanding-notes emails (counts only, no patient information). See /ehr/admin/email.
+      # Render free instances block SMTP ports: use resend there; Gmail SMTP works on paid instances.
+      - key: EHR_MAIL_PROVIDER
+        sync: false
+      - key: EHR_MAIL_FROM
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: EHR_SMTP_HOST
+        sync: false
+      - key: EHR_SMTP_PORT
+        sync: false
+      - key: EHR_SMTP_USER
+        sync: false
+      - key: EHR_SMTP_PASS
+        sync: false
+      - key: EHR_DIGEST_TIME
+        value: "16:30"
+      - key: EHR_DIGEST_DAYS
+        value: "1-5"
 
   # Demo copy: fictional staff + patients, free instance, no disk.
   # The database resets to fresh sample data whenever the instance restarts.

@@ -33,6 +33,7 @@ function migrate(db, schema) {
     // HIPAA hardening (see docs/hipaa/)
     users: [
       ["supervisor_id", "INTEGER REFERENCES users(id)"],  // clinical supervisor who co-signs this user's notes
+      ["digest_email", "INTEGER NOT NULL DEFAULT 1"],      // end-of-day outstanding-notes email (src/digest.js)
       ["requires_cosign", "INTEGER"],         // 1 / 0 override; NULL = decide from credentials (src/supervision.js)
       ["education_level", "TEXT"],            // AHCCCS modifier HM/HN/HO/HP; derived from credentials when empty
       ["mfa_secret", "TEXT"],                 // base32 TOTP secret (encrypted at rest when EHR_DATA_KEY is set)

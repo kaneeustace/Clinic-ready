@@ -139,6 +139,7 @@ router.get("/admin", adminOnly, (req, res) => {
             <li><a href="/ehr/admin/audit">Audit log</a></li>
             <li><a href="/ehr/admin/audit.csv">Export audit log (CSV)</a></li>
             <li><a href="/ehr/account">My account and password</a></li>
+            <li><a href="/ehr/admin/email">End-of-day note emails</a></li>
           </ul>
           <p class="muted small">Patient access reports are available from the audit log by filtering on a patient MRN.</p>
         </section>
@@ -603,6 +604,7 @@ function accountPage(req, errors = [], mfaErrors = []) {
           <div class="form-actions"><button class="btn btn--primary" type="submit">Change password</button></div>
         </form>
         ${mfaAccountCard(req, u, mfaErrors)}
+        ${require("./email").accountCard(req)}
       </div>`,
   });
 }

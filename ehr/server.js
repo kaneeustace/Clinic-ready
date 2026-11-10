@@ -16,6 +16,9 @@ setInterval(() => db.prepare("DELETE FROM sessions WHERE expires_at < datetime('
 // Disabled with a warning when EHR_BACKUP_KEY is missing; never writes unencrypted backups.
 require("./src/backup").scheduleBackups(db);
 
+// End-of-day outstanding-notes emails (counts only, no PHI). Needs EHR_MAIL_PROVIDER; see src/digest.js.
+require("./src/digest").scheduleDigests(db);
+
 createApp(db).listen(PORT, () => {
   console.log(`Clinic Ready running at http://localhost:${PORT}  (EHR: http://localhost:${PORT}/ehr)`);
 });
