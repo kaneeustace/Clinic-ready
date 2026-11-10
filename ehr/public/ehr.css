@@ -395,3 +395,17 @@ dl.facts.plan-facts { grid-template-columns: minmax(110px, 34%) minmax(0, 1fr); 
 .wb-card .btn { justify-self: start; }
 .countdown { font-variant-numeric: tabular-nums; }
 .wb-alert .row { flex-wrap: wrap; }
+
+/* ---------- Patient pictures ---------- */
+.avatar--photo { display: block; overflow: hidden; padding: 0; background: var(--bg); aspect-ratio: 1; align-self: flex-start; border-radius: 50%; clip-path: circle(50%); }
+.avatar--photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.photo-preview { max-width: 220px; max-height: 220px; border-radius: 8px; border: 1px solid var(--border, #dde3ee); }
+.photo-grid { list-style: none; margin: 0; padding: 0; display: grid; gap: 1rem; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+.photo-card { border: 1px solid var(--border, #dde3ee); border-radius: 10px; overflow: hidden; background: #fff; display: flex; flex-direction: column; }
+.photo-card img { width: 100%; height: 180px; object-fit: cover; display: block; background: #f3f5f9; }
+.photo-card__body { padding: .65rem .75rem; display: grid; gap: .3rem; }
+.photo-card__body p { margin: 0; }
+.photo-card__body .badge { justify-self: start; }
+.photo-card form { display: inline; }
+@media (max-width: 600px) { .chart-head > .avatar--photo { display: block; width: 56px; height: 56px; } }
+@media print { .photo-card form { display: none; } }

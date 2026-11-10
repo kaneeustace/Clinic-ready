@@ -42,6 +42,45 @@
       if (target && opt && opt.getAttribute("data-latest") !== null && !target.value) target.value = opt.getAttribute("data-latest");
     });
   });
+  // Patient pictures: <form data-photo-upload>. Resize to max 1600px and re-encode as JPEG in the browser
+  // (smaller uploads; drops EXIF such as GPS location), then send as a data: URL in image_data.
+  document.querySelectorAll("form[data-photo-upload]").forEach(function (form) {
+    var file = form.querySelector("[data-photo-file]"), out = form.querySelector("input[name=image_data]");
+    var preview = form.querySelector("[data-photo-preview]"), status = form.querySelector("[data-photo-status]");
+    var busy = null;
+    function say(t) { if (status) status.textContent = t; }
+    function load(f) {
+      if (window.createImageBitmap) return createImageBitmap(f, { imageOrientation: "from-image" }).catch(function () { return createImageBitmap(f); });
+      return new Promise(function (ok, bad) {
+        var r = new FileReader();
+        r.onload = function () { var img = new Image(); img.onload = function () { ok(img); }; img.onerror = bad; img.src = r.result; };
+        r.onerror = bad; r.readAsDataURL(f);
+      });
+    }
+    file.addEventListener("change", function () {
+      out.value = ""; if (preview) preview.hidden = true;
+      var f = file.files && file.files[0];
+      if (!f) return;
+      say("Preparing picture…");
+      busy = load(f).then(function (img) {
+        var w = img.width, h = img.height, max = 1600, k = Math.min(1, max / Math.max(w, h));
+        var c = document.createElement("canvas");
+        c.width = Math.round(w * k); c.height = Math.round(h * k);
+        var ctx = c.getContext("2d"); ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, c.width, c.height);
+        ctx.drawImage(img, 0, 0, c.width, c.height);
+        out.value = c.toDataURL("image/jpeg", 0.85);
+        if (preview) { preview.src = out.value; preview.hidden = false; }
+        say("Ready to upload.");
+      }).catch(function () { say("That file couldn't be read as a picture. Try a JPEG or PNG."); })
+        .then(function () { busy = null; });
+    });
+    form.addEventListener("submit", function (e) {
+      if (busy) { e.preventDefault(); say("Still preparing the picture, try again in a moment."); return; }
+      if (!out.value) { e.preventDefault(); say("Choose a picture first."); return; }
+      file.disabled = true; // don't send the original file
+      say("Uploading…");
+    });
+  });
   // Live signature countdowns: <span data-deadline="ISO" data-total-hours="24">
   function tick() {
     document.querySelectorAll("[data-deadline]").forEach(function (el) {

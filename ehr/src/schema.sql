@@ -413,3 +413,19 @@ CREATE TABLE IF NOT EXISTS security_alerts (
   resolution_note TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_security_alerts_status ON security_alerts(status, ts);
+
+-- Patient pictures: profile photo, photo ID, insurance cards, other. Stored in the database so they are covered
+-- by access control, the audit log and encrypted backups. Images are re-encoded client-side (EXIF stripped).
+CREATE TABLE IF NOT EXISTS patient_images (
+  id INTEGER PRIMARY KEY,
+  patient_id INTEGER NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
+  category TEXT NOT NULL DEFAULT 'other' CHECK (category IN ('profile','photo_id','insurance_front','insurance_back','other')),
+  caption TEXT,
+  mime TEXT NOT NULL CHECK (mime IN ('image/jpeg','image/png','image/webp')),
+  data BLOB NOT NULL,
+  bytes INTEGER NOT NULL,
+  is_profile INTEGER NOT NULL DEFAULT 0,
+  uploaded_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_patient_images_patient ON patient_images(patient_id, created_at);

@@ -10,7 +10,7 @@ const EHR_PUBLIC = path.resolve(__dirname, "..", "public");
 
 // Feature modules. Each exports `router` (mounted at /ehr, behind login);
 // requests.js also exports `publicRouter` (mounted at /api, no login).
-const MODULES = ["dashboard", "patients", "schedule", "notes", "clinical", "plans", "billing", "requests", "records", "security", "backups", "admin"];
+const MODULES = ["dashboard", "patients", "schedule", "notes", "clinical", "plans", "billing", "requests", "records", "photos", "security", "backups", "admin"];
 
 function securityHeaders(req, res, next) {
   res.set({
@@ -68,7 +68,10 @@ function createApp(db) {
   });
 
   /* ---------- Body parsing ---------- */
-  app.use(express.urlencoded({ extended: false, limit: "200kb" }));
+  // Picture uploads get a larger limit, parsed only once the session is known (routes/photos.js).
+  const photos = require("./routes/photos");
+  const urlencoded = express.urlencoded({ extended: false, limit: "200kb" });
+  app.use((req, res, next) => (photos.isUploadPath(req) ? next() : urlencoded(req, res, next)));
   app.use(express.json({ limit: "100kb" }));
   app.use(sameOrigin);
 
@@ -81,7 +84,7 @@ function createApp(db) {
 
   /* ---------- EHR ---------- */
   app.use("/ehr/static", express.static(EHR_PUBLIC, { maxAge: "1h" }));
-  app.use("/ehr", noStore, auth.sessionMiddleware, auth.csrfProtection);
+  app.use("/ehr", noStore, auth.sessionMiddleware, photos.uploadBodyParser, auth.csrfProtection);
   app.use("/ehr", auth.router);
   app.use("/ehr", auth.requireAuth);
   for (const m of MODULES) app.use("/ehr", require(`./routes/${m}`).router);

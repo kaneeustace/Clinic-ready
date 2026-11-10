@@ -194,7 +194,7 @@ function page(req, { title, active = "", body, bare = false }) {
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/ehr/static/ehr.css?v=7">
+  <link rel="stylesheet" href="/ehr/static/ehr.css?v=8">
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
@@ -212,6 +212,7 @@ const CHART_TABS = [
   { key: "plan", label: "Treatment plan", path: "/treatment-plan", perm: "clinical:read" },
   { key: "measures", label: "Measures", path: "/measures", perm: "clinical:read" },
   { key: "billing", label: "Billing", path: "/billing", perm: "billing:read" },
+  { key: "photos", label: "Pictures", path: "/photos", perm: "patients:read" },
 ];
 
 /** Load a patient by id or return null. */
@@ -247,10 +248,13 @@ function chartPage(req, patient, tab, body, { title } = {}) {
   const dxRows = showDx ? req.db.prepare(
     `SELECT icd10_code, description, is_primary FROM diagnoses WHERE patient_id = ? AND status = 'active'
      ORDER BY is_primary DESC, created_at, id`).all(patient.id) : [];
+  const profilePhoto = req.db.prepare("SELECT id FROM patient_images WHERE patient_id = ? AND is_profile = 1 LIMIT 1").get(patient.id);
   const planPill = can(req.user, "clinical:read") ? planBanner(req.db, patient, base) : "";
   const header = html`
     <section class="chart-head" aria-label="Patient summary">
-      <span class="avatar avatar--lg" aria-hidden="true">${initials(`${patient.first_name} ${patient.last_name}`)}</span>
+      ${profilePhoto
+        ? html`<a class="avatar avatar--lg avatar--photo" href="${base}/photos" title="Pictures"><img src="${base}/photos/${profilePhoto.id}?thumb=1" alt="Profile photo of ${patientName(patient)}"></a>`
+        : html`<span class="avatar avatar--lg" aria-hidden="true">${initials(`${patient.first_name} ${patient.last_name}`)}</span>`}
       <div class="chart-head__main">
         <div class="chart-head__title">
           <h1 class="chart-head__name">${patientName(patient)}</h1>
