@@ -140,6 +140,26 @@ function flashes(req) {
   return list.map((f) => html`<div class="alert alert--${f.type}" role="${f.type === "error" ? "alert" : "status"}">${f.message}</div>`);
 }
 
+/** Phone tab bar: the first four workspace items plus a "More" sheet with everything else and sign out. */
+function bottomNav(req, user, active) {
+  const items = NAV.filter((n) => !n.perm || can(user, n.perm));
+  const main = items.filter((n) => n.group === "Workspace").slice(0, 4);
+  const rest = items.filter((n) => !main.includes(n));
+  const short = { dashboard: "Home", notes: "Notes" };
+  return html`
+    <nav class="bottomnav" aria-label="Quick navigation">
+      ${main.map((n) => html`<a href="${n.href}" ${n.key === active ? raw('aria-current="page"') : ""}>${icon(n.icon)}<span>${short[n.key] || n.label}</span></a>`)}
+      <details class="bottomnav__more">
+        <summary ${rest.some((n) => n.key === active) || active === "account" ? raw('aria-current="page"') : ""}>${icon("M4 6h16M4 12h16M4 18h16")}<span>More</span></summary>
+        <div class="bottomnav__sheet">
+          <a class="bottomnav__user" href="/ehr/account"><span class="avatar avatar--sm" aria-hidden="true">${initials(user.name)}</span><span><strong>${user.name}</strong><small>${user.credentials ? `${user.credentials} · ` : ""}${humanize(user.role)}</small></span></a>
+          ${rest.map((n) => html`<a href="${n.href}" ${n.key === active ? raw('aria-current="page"') : ""}>${icon(n.icon)}<span>${n.label}</span></a>`)}
+          <form method="post" action="/ehr/logout">${csrfField(req)}<button type="submit">${icon("M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10")}<span>Sign out</span></button></form>
+        </div>
+      </details>
+    </nav>`;
+}
+
 function page(req, { title, active = "", body, bare = false }) {
   const user = req.user;
   const shell = bare || !user
@@ -167,6 +187,7 @@ function page(req, { title, active = "", body, bare = false }) {
         </aside>
         <div class="app__main">
           <header class="topbar">
+            <a class="topbar__logo" href="/ehr" aria-label="Clinic Ready home"><span class="logo-dot" aria-hidden="true"></span></a>
             <form class="topbar__search" method="get" action="/ehr/patients" role="search">
               <label class="visually-hidden" for="global-q">Search patients</label>
               ${icon("M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM21 21l-4.3-4.3")}
@@ -174,8 +195,9 @@ function page(req, { title, active = "", body, bare = false }) {
             </form>
             <div class="topbar__right">
               ${SHOW_DEMO_BANNER ? html`<span class="topbar__demo" title="Use synthetic data only">Demo</span>` : ""}
-              <a class="btn btn--ghost btn--sm" href="/ehr/account">Account</a>
-              <form method="post" action="/ehr/logout">${csrfField(req)}<button class="btn btn--ghost btn--sm" type="submit">Sign out</button></form>
+              <a class="btn btn--ghost btn--sm topbar__account" href="/ehr/account">Account</a>
+              <a class="topbar__me" href="/ehr/account" aria-label="Account: ${user.name}"><span class="avatar avatar--sm" aria-hidden="true">${initials(user.name)}</span></a>
+              <form class="topbar__signout" method="post" action="/ehr/logout">${csrfField(req)}<button class="btn btn--ghost btn--sm" type="submit">Sign out</button></form>
             </div>
           </header>
           <main id="main" class="content">
@@ -183,6 +205,7 @@ function page(req, { title, active = "", body, bare = false }) {
             ${body}
           </main>
         </div>
+        ${bottomNav(req, user, active)}
       </div>`;
   return "<!doctype html>" + html`
 <html lang="en">
@@ -195,7 +218,7 @@ function page(req, { title, active = "", body, bare = false }) {
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/ehr/static/ehr.css?v=9">
+  <link rel="stylesheet" href="/ehr/static/ehr.css?v=10">
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>

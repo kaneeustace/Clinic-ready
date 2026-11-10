@@ -46,14 +46,21 @@ router.get("/", (req, res) => {
     title: "Dashboard",
     active: "dashboard",
     body: html`
-      <div class="page-head"><div><h1>Good ${Number(nowLocal().slice(11, 13)) < 12 ? "morning" : Number(nowLocal().slice(11, 13)) < 17 ? "afternoon" : "evening"}, ${u.name.split(" ")[0]}</h1><p>${fmtDate(t)} · ${appts.length} ${mineOnly ? "of your " : ""}appointment${appts.length === 1 ? "" : "s"} on today's schedule</p></div></div><div class="row no-print" style="margin-top:-.5rem;margin-bottom:1.25rem">${can(u, "patients:write") ? html`<a class="btn btn--primary btn--sm" href="/ehr/patients/new">New patient</a>` : ""}${can(u, "schedule:write") ? html`<a class="btn btn--sm" href="/ehr/schedule/new">Book appointment</a>` : ""}</div>
-      ${can(u, "clinical:write") ? renderWorkboard(buildWorkboard(db, u)) : ""}
+      <section class="hero">
+        <div class="hero__text">
+          <p class="hero__date">${fmtDate(t)}</p>
+          <h1>Good ${Number(nowLocal().slice(11, 13)) < 12 ? "morning" : Number(nowLocal().slice(11, 13)) < 17 ? "afternoon" : "evening"}, ${u.name.split(" ")[0]}</h1>
+          <p>${appts.length ? `${appts.length} appointment${appts.length === 1 ? "" : "s"} on ${mineOnly ? "your" : "the"} schedule today` : `No appointments on ${mineOnly ? "your" : "the"} schedule today`}</p>
+        </div>
+        <div class="hero__actions no-print">${can(u, "patients:write") ? html`<a class="btn btn--light" href="/ehr/patients/new">New patient</a>` : ""}${can(u, "schedule:write") ? html`<a class="btn btn--glass" href="/ehr/schedule/new">Book appointment</a>` : ""}</div>
+      </section>
       <div class="tiles">
         ${tile(mineOnly ? "My appointments today" : "Appointments today", appts.length, "/ehr/schedule")}
         ${tile("My unsigned notes", drafts, "/ehr/notes")}
         ${tile("New appointment requests", newRequests, "/ehr/requests")}
         ${tile("Unbilled charges", unbilled, "/ehr/billing")}
       </div>
+      ${can(u, "clinical:write") ? renderWorkboard(buildWorkboard(db, u)) : ""}
       ${flags.length ? html`
         <section class="card card--alert">
           <h2>Safety follow-up</h2>

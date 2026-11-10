@@ -81,6 +81,12 @@
       say("Uploading…");
     });
   });
+  // Phone "More" sheet: close when tapping outside it or pressing Escape.
+  var more = document.querySelector(".bottomnav__more");
+  if (more) {
+    document.addEventListener("click", function (e) { if (more.open && !e.target.closest(".bottomnav__sheet") && !e.target.closest(".bottomnav__more > summary")) more.open = false; });
+    document.addEventListener("keydown", function (e) { if (e.key === "Escape") more.open = false; });
+  }
   // Live signature countdowns: <span data-deadline="ISO" data-total-hours="24">
   function tick() {
     document.querySelectorAll("[data-deadline]").forEach(function (el) {
