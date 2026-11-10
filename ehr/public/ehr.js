@@ -102,11 +102,15 @@
     var spot = document.querySelector("[data-install-hint]") || (document.querySelector(".hero") && document.querySelector(".hero").parentNode);
     if (!ios || standalone || !spot) return;
     if (dismissed && !document.querySelector("[data-install-hint]")) return;
+    var meta = document.querySelector('meta[name="apple-mobile-web-app-title"]');
+    var appName = (meta && meta.getAttribute("content")) || "Clinic Ready";
+    var iconLink = document.querySelector('link[rel="apple-touch-icon"]');
+    var iconSrc = (iconLink && iconLink.getAttribute("href")) || "/ehr/static/icons/icon-180.png";
     var box = document.createElement("div");
     box.className = "install-hint";
     box.setAttribute("role", "note");
-    box.innerHTML = '<img src="/ehr/static/icons/icon-180.png" alt="" width="44" height="44">' +
-      '<div><strong>Get the Clinic Ready app</strong><span>Tap <svg viewBox="0 0 24 24" width="16" height="16" aria-label="Share" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 8l5-5 5 5M5 12v8h14v-8"/></svg> <b>Share</b> in Safari (on newer iPhones it\'s under <b>···</b>), then <b>Add to Home Screen</b>.</span></div>' +
+    box.innerHTML = '<img src="' + iconSrc.replace(/["<>]/g, "") + '" alt="" width="44" height="44">' +
+      '<div><strong>Get the ' + appName.replace(/[<>&"]/g, "") + ' app</strong><span>Tap <svg viewBox="0 0 24 24" width="16" height="16" aria-label="Share" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M7 8l5-5 5 5M5 12v8h14v-8"/></svg> <b>Share</b> in Safari (on newer iPhones it\'s under <b>···</b>), then <b>Add to Home Screen</b>.</span></div>' +
       '<button type="button" aria-label="Dismiss">&times;</button>';
     box.querySelector("button").addEventListener("click", function () { box.remove(); try { localStorage.setItem("cr-install-dismissed", "1"); } catch (e) {} });
     var target = document.querySelector("[data-install-hint]");

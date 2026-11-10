@@ -116,6 +116,7 @@ router.get("/admin", adminOnly, (req, res) => {
     active: "admin",
     body: html`
       <div class="page-head"><h1>Administration</h1></div>
+      ${clinicCallout(req)}
       <div class="tiles">
         <a class="tile" href="/ehr/admin/users"><span class="tile__num">${Object.values(byRole).reduce((a, r) => a + r.active, 0)}</span><span class="tile__label">Active users</span></a>
         <div class="tile"><span class="tile__num">${sessions}</span><span class="tile__label">Active sessions</span></div>
@@ -150,6 +151,19 @@ router.get("/admin", adminOnly, (req, res) => {
       </div>`,
   }));
 });
+
+/** Big link to Clinic settings (logo, NPI, tax ID), with what's still missing. */
+function clinicCallout(req) {
+  const c = require("../clinic").getClinic(req.db);
+  const missing = [!c.hasLogo && "logo", !c.npi && "NPI", !c.tax_id && "tax ID", !c.address1 && "address", !c.phone && "phone"].filter(Boolean);
+  return html`
+    <a class="clinic-callout ${missing.length ? "clinic-callout--todo" : ""}" href="/ehr/admin/clinic">
+      ${require("../views").brandMark(c, "brand-logo--lg")}
+      <span><strong>Clinic settings</strong>
+        <span class="small">${c.name}${missing.length ? html` · <b>Still needed: ${missing.join(", ")}</b>` : " · logo, NPI, tax ID and address are set"}</span></span>
+      <span class="btn btn--primary btn--sm">${missing.length ? "Finish setup" : "Edit"}</span>
+    </a>`;
+}
 
 /* ------------------------------------------------------------------ */
 /* Data storage: is the database on a persistent disk?                */

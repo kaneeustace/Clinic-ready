@@ -613,3 +613,12 @@ fieldset { background: linear-gradient(180deg, #f9fbfe, #f5f8fc); border-color: 
 .swatch { gap: .4rem; } .swatch__dot { width: 18px; height: 18px; border-radius: 50%; display: inline-block; box-shadow: inset 0 0 0 1px rgba(0,0,0,.1); }
 .card.stack { align-content: start; }
 :root { --grad-brand: linear-gradient(120deg, #1b2f63 0%, var(--primary) 55%, #149c96 100%); }
+.clinic-callout { display: flex; align-items: center; gap: 1rem; padding: 1rem 1.25rem; margin-bottom: 1.25rem; border-radius: var(--radius);
+  background: #fff; border: 1px solid rgba(15,27,51,.08); box-shadow: var(--shadow); color: var(--text); text-decoration: none; }
+.clinic-callout:hover { color: var(--text); box-shadow: var(--shadow-lg); }
+.clinic-callout > span:nth-child(2) { flex: 1; display: grid; gap: .15rem; }
+.clinic-callout strong { font-size: 1.05rem; }
+.clinic-callout--todo { border-color: #c9d8fb; background: linear-gradient(90deg, var(--primary-light), #fff 70%); }
+.clinic-callout b { color: var(--primary-dark); }
+@media (max-width: 600px) { .clinic-callout { flex-wrap: wrap; } .clinic-callout .btn { width: 100%; } }
+@media (max-width: 759px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

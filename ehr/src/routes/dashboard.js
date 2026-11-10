@@ -54,6 +54,7 @@ router.get("/", (req, res) => {
         </div>
         <div class="hero__actions no-print">${can(u, "patients:write") ? html`<a class="btn btn--light" href="/ehr/patients/new">New patient</a>` : ""}${can(u, "schedule:write") ? html`<a class="btn btn--glass" href="/ehr/schedule/new">Book appointment</a>` : ""}</div>
       </section>
+      ${can(u, "admin") && !require("../clinic").getClinic(db).billingReady ? html`<div class="alert alert--info" role="note"><strong>Finish your clinic setup:</strong> add your logo, group NPI, tax ID and address so they appear on superbills and printouts. <a href="/ehr/admin/clinic">Open Clinic settings</a></div>` : ""}
       <div class="tiles">
         ${tile(mineOnly ? "My appointments today" : "Appointments today", appts.length, "/ehr/schedule")}
         ${tile("My unsigned notes", drafts, "/ehr/notes")}

@@ -228,19 +228,19 @@ function page(req, { title, active = "", body, bare = false }) {
   <meta name="apple-mobile-web-app-title" content="${clinic.name.slice(0, 20)}">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <link rel="manifest" href="/ehr/manifest.webmanifest">
-  <link rel="apple-touch-icon" href="/ehr/static/icons/icon-180.png">
+  <link rel="apple-touch-icon" href="${clinic.logoUrl || "/ehr/static/icons/icon-180.png"}">
   <meta name="robots" content="noindex, nofollow">
   <title>${title ? `${title} · ` : ""}${clinic.name}</title>
   <link rel="icon" href="/assets/img/favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/ehr/static/ehr.css?v=13">${brandCss(clinic) ? raw(`<style>${brandCss(clinic)}</style>`) : ""}
+  <link rel="stylesheet" href="/ehr/static/ehr.css?v=15">${brandCss(clinic) ? raw(`<style>${brandCss(clinic)}</style>`) : ""}
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
   ${shell}
-  <script src="/ehr/static/ehr.js?v=13" defer></script>
+  <script src="/ehr/static/ehr.js?v=14" defer></script>
 </body>
 </html>`.s;
 }
