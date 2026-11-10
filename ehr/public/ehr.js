@@ -142,6 +142,21 @@
       say("Scanning with AI…");
     });
   });
+  // Appointment colors: tapping a swatch sets that row's color picker.
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest("[data-swatch]");
+    if (!b) return;
+    var input = document.getElementById(b.getAttribute("data-target"));
+    if (!input) return;
+    input.value = b.getAttribute("data-swatch");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  document.querySelectorAll("[data-color-input]").forEach(function (input) {
+    input.addEventListener("input", function () {
+      var row = input.closest(".color-row"), sample = row && row.querySelector(".color-row__sample");
+      if (sample) sample.style.setProperty("--appt", input.value);
+    });
+  });
   // Live signature countdowns: <span data-deadline="ISO" data-total-hours="24">
   function tick() {
     document.querySelectorAll("[data-deadline]").forEach(function (el) {

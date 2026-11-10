@@ -143,6 +143,7 @@ router.get("/admin", adminOnly, (req, res) => {
             <li><a href="/ehr/admin/audit.csv">Export audit log (CSV)</a></li>
             <li><a href="/ehr/account">My account and password</a></li>
             <li><a href="/ehr/admin/clinic">Clinic settings (name, logo, NPI, tax ID)</a></li>
+            <li><a href="/ehr/admin/appointment-colors">Appointment colors</a></li>
             <li><a href="/ehr/admin/customers">Customers (all clinics you host)</a></li>
             <li><a href="/ehr/admin/email">End-of-day note emails</a></li>
           </ul>

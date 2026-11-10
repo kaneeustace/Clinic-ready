@@ -147,6 +147,56 @@ router.post("/admin/clinic/logo/delete", adminOnly, (req, res) => {
   res.redirect("/ehr/admin/clinic");
 });
 
+/* ---------------- Appointment colors ---------------- */
+const { DEFAULTS: APPT_DEFAULTS, SWATCHES, HEX, apptColors } = require("../appt-colors");
+const APPT_TYPES = Object.keys(APPT_DEFAULTS);
+const typeName = (t) => t.replace(/_/g, " ").replace(/\b\w/, (c) => c.toUpperCase()).replace("eval", "evaluation").replace("med ", "medication ");
+
+router.get("/admin/appointment-colors", adminOnly, (req, res) => {
+  const colors = apptColors(req.db);
+  res.send(page(req, {
+    title: "Appointment colors",
+    active: "admin",
+    body: html`
+      <div class="page-head"><div><h1>Appointment colors</h1><p>Pick a color for each appointment type. It's used on the schedule, the dashboard and appointment pages.</p></div>
+        <a class="btn btn--sm" href="/ehr/schedule">Open schedule</a></div>
+      <form class="card stack" method="post" action="/ehr/admin/appointment-colors">
+        ${csrfField(req)}
+        <ul class="list-plain color-rows">${APPT_TYPES.map((t) => html`
+          <li class="color-row">
+            <span class="appt appt--scheduled color-row__sample" style="--appt:${colors[t]}"><strong>9:00 AM</strong> ${typeName(t)}</span>
+            <div class="color-row__pick">
+              <label class="visually-hidden" for="c-${t}">${typeName(t)} color</label>
+              <input type="color" id="c-${t}" name="${t}" value="${colors[t]}" data-color-input>
+              <div class="swatches">${SWATCHES.map((c) => html`<button type="button" class="swatch-btn" style="background:${c}" data-swatch="${c}" data-target="c-${t}" aria-label="Use ${c} for ${typeName(t)}"></button>`)}</div>
+            </div>
+          </li>`)}</ul>
+        <div class="form-actions"><button class="btn btn--primary" type="submit">Save colors</button>
+          <button class="btn btn--ghost" type="submit" name="reset" value="1" data-confirm="Go back to the default colors?">Reset to defaults</button></div>
+      </form>`,
+  }));
+});
+
+router.post("/admin/appointment-colors", adminOnly, (req, res) => {
+  const b = req.body || {};
+  if (b.reset === "1") {
+    req.db.prepare("DELETE FROM appointment_type_colors").run();
+    audit(req, "update", "appointment_colors", null, null, "reset");
+    req.flash("success", "Appointment colors reset to the defaults.");
+    return res.redirect("/ehr/admin/appointment-colors");
+  }
+  const up = req.db.prepare(`INSERT INTO appointment_type_colors (type, color) VALUES (?, ?)
+    ON CONFLICT(type) DO UPDATE SET color = excluded.color, updated_at = datetime('now')`);
+  const changed = [];
+  for (const t of APPT_TYPES) {
+    const c = String(b[t] || "").toLowerCase();
+    if (HEX.test(c)) { up.run(t, c); changed.push(t); }
+  }
+  audit(req, "update", "appointment_colors", null, null, changed.join(","));
+  req.flash("success", "Appointment colors saved.");
+  res.redirect("/ehr/admin/appointment-colors");
+});
+
 /** Public handlers mounted before sign-in (app.js): the logo and the home-screen app manifest. */
 function logoHandler(req, res) {
   const row = req.db.prepare("SELECT logo, logo_mime FROM clinic_settings WHERE id = 1").get();

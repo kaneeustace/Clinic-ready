@@ -15,6 +15,7 @@ const {
 
 const router = express.Router();
 
+const { apptColors, colorFor } = require("../appt-colors");
 const TYPES = ["intake", "therapy", "psychiatry_eval", "med_management", "family", "group", "consult"];
 const MODALITIES = ["in_person", "telehealth"];
 const STATUSES = ["scheduled", "checked_in", "completed", "no_show", "cancelled", "late_cancel"];
@@ -330,6 +331,9 @@ router.get("/schedule", requirePerm("schedule:read"), (req, res) => {
       </form>
     </div>`;
 
+  const colors = apptColors(req.db);
+  const legend = html`<div class="appt-legend" aria-label="Appointment colors">${TYPES.map((ty) => html`<span><span class="type-dot" style="--appt:${colorFor(colors, ty)}"></span>${humanize(ty)}</span>`)}
+    ${can(u, "admin") ? html`<a class="small" href="/ehr/admin/appointment-colors">Change colors</a>` : ""}</div>`;
   let content;
   if (view === "week") {
     content = html`
@@ -340,7 +344,7 @@ router.get("/schedule", requirePerm("schedule:read"), (req, res) => {
             <section class="cal__day ${d === t ? "cal__day--today" : ""}" aria-label="${weekdayLabel(d)} ${fmtDate(d)}">
               <h3><a href="${link(d, { view: "day" })}">${weekdayLabel(d)} ${fmtDate(d).replace(/, \d{4}$/, "")}</a></h3>
               ${list.length ? list.map((a) => html`
-                <a class="appt appt--${a.status}" href="/ehr/appointments/${a.id}">
+                <a class="appt appt--${a.status}" style="--appt:${colorFor(colors, a.type)}" href="/ehr/appointments/${a.id}">
                   <strong>${fmtTime(a.start_at)}</strong> ${patientName(a)}<br>
                   <span class="small">${humanize(a.type)}${a.modality === "telehealth" ? " · Telehealth" : ""}${showClin ? ` · ${a.clinician_name}` : ""}${a.status !== "scheduled" ? ` · ${STATUS_LABELS[a.status]}` : ""}</span>
                 </a>`) : html`<p class="muted small">No appointments</p>`}
@@ -359,7 +363,7 @@ router.get("/schedule", requirePerm("schedule:read"), (req, res) => {
                 <td><a href="/ehr/appointments/${a.id}">${fmtTime(a.start_at)}–${fmtTime(a.end_at)}</a></td>
                 <td><a href="/ehr/patients/${a.patient_id}/appointments">${patientName(a)}</a></td>
                 ${showClin ? html`<td>${a.clinician_name}</td>` : ""}
-                <td>${humanize(a.type)}${a.modality === "telehealth" ? html` <span class="pill">Telehealth</span>` : ""}</td>
+                <td><span class="type-dot" style="--appt:${colorFor(colors, a.type)}"></span>${humanize(a.type)}${a.modality === "telehealth" ? html` <span class="pill">Telehealth</span>` : ""}</td>
                 <td>${badge(a.status, STATUS_LABELS[a.status])}</td>
                 <td>${statusActions(req, a, selfUrl)}</td>
               </tr>`)}</tbody>
@@ -379,6 +383,7 @@ router.get("/schedule", requirePerm("schedule:read"), (req, res) => {
         </div>
       </div>
       ${toolbar}
+      ${legend}
       ${content}`,
   }));
 });
@@ -532,7 +537,7 @@ router.get("/appointments/:id", requirePerm("schedule:read"), (req, res) => {
             <dt>Clinician</dt><dd>${a.clinician_name}${a.clinician_credentials ? `, ${a.clinician_credentials}` : ""}</dd>
             <dt>Date</dt><dd>${weekdayLabel(a.start_at.slice(0, 10))}, ${fmtDate(a.start_at)}</dd>
             <dt>Time</dt><dd>${fmtTime(a.start_at)}–${fmtTime(a.end_at)} (${minutesBetween(a.start_at, a.end_at)} min)</dd>
-            <dt>Type</dt><dd>${humanize(a.type)}</dd>
+            <dt>Type</dt><dd><span class="type-dot" style="--appt:${colorFor(apptColors(req.db), a.type)}"></span>${humanize(a.type)}</dd>
             <dt>Modality</dt><dd>${humanize(a.modality)}</dd>
             <dt>Location</dt><dd>${a.location || html`<span class="muted">Not set</span>`}</dd>
             ${a.telehealth_url ? html`<dt>Telehealth link</dt><dd><a href="${a.telehealth_url}" target="_blank" rel="noopener noreferrer">Join video visit</a></dd>` : ""}
@@ -661,6 +666,7 @@ router.get("/patients/:id/appointments", requirePerm("schedule:read"), (req, res
   const past = rows.filter((a) => !upcoming.includes(a)).reverse();
   const counts = past.reduce((m, a) => { m[a.status] = (m[a.status] || 0) + 1; return m; }, {});
 
+  const colors = apptColors(req.db);
   const table = (list, empty) => list.length ? html`
     <div class="table-wrap"><table class="table">
       <thead><tr><th>Date</th><th>Time</th><th>Type</th><th>Clinician</th><th>Status</th></tr></thead>
@@ -668,7 +674,7 @@ router.get("/patients/:id/appointments", requirePerm("schedule:read"), (req, res
         <tr>
           <td><a href="/ehr/appointments/${a.id}">${weekdayLabel(a.start_at.slice(0, 10))}, ${fmtDate(a.start_at)}</a></td>
           <td>${fmtTime(a.start_at)}–${fmtTime(a.end_at)}</td>
-          <td>${humanize(a.type)}${a.modality === "telehealth" ? html` <span class="pill">Telehealth</span>` : ""}</td>
+          <td><span class="type-dot" style="--appt:${colorFor(colors, a.type)}"></span>${humanize(a.type)}${a.modality === "telehealth" ? html` <span class="pill">Telehealth</span>` : ""}</td>
           <td>${a.clinician_name}</td>
           <td>${badge(a.status, STATUS_LABELS[a.status])}</td>
         </tr>`)}</tbody>

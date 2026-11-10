@@ -503,3 +503,10 @@ CREATE TABLE IF NOT EXISTS clinic_settings (
   updated_by INTEGER REFERENCES users(id),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- Calendar color for each appointment type (Administration → Appointment colors). Missing rows use defaults.
+CREATE TABLE IF NOT EXISTS appointment_type_colors (
+  type TEXT PRIMARY KEY,
+  color TEXT NOT NULL CHECK (color GLOB '#[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]'),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);

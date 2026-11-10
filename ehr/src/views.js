@@ -235,12 +235,12 @@ function page(req, { title, active = "", body, bare = false }) {
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/ehr/static/ehr.css?v=15">${brandCss(clinic) ? raw(`<style>${brandCss(clinic)}</style>`) : ""}
+  <link rel="stylesheet" href="/ehr/static/ehr.css?v=16">${brandCss(clinic) ? raw(`<style>${brandCss(clinic)}</style>`) : ""}
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
   ${shell}
-  <script src="/ehr/static/ehr.js?v=14" defer></script>
+  <script src="/ehr/static/ehr.js?v=15" defer></script>
 </body>
 </html>`.s;
 }

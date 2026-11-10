@@ -3,6 +3,7 @@ const express = require("express");
 const { can } = require("../permissions");
 const { buildWorkboard, renderWorkboard } = require("../workboard");
 const { urDue, authAlerts, LEVELS } = require("./loc");
+const { apptColors, colorFor } = require("../appt-colors");
 const { html, page, badge, fmtTime, fmtDate, today, addDays, nowLocal, patientName, humanize } = require("../views");
 
 const router = express.Router();
@@ -39,6 +40,7 @@ router.get("/", (req, res) => {
   // Utilization reviews / authorizations needing action in the next 3 days (UR staff, clinicians for their own clients).
   const ur = can(u, "clinical:write") || can(u, "billing:write") ? urDue(db, { days: 3, clinicianId: mineOnly ? u.id : null }) : [];
 
+  const colors = apptColors(db);
   const tile = (label, value, href) => value === null ? "" : html`
     <a class="tile" href="${href}"><span class="tile__num">${value}</span><span class="tile__label">${label}</span></a>`;
 
@@ -94,7 +96,7 @@ router.get("/", (req, res) => {
                 <tr>
                   <td>${fmtTime(a.start_at)}</td>
                   <td><a href="/ehr/patients/${a.patient_id}">${patientName(a)}</a></td>
-                  <td>${humanize(a.type)}${a.modality === "telehealth" ? html` <span class="pill">Telehealth</span>` : ""}</td>
+                  <td><span class="type-dot" style="--appt:${colorFor(colors, a.type)}"></span>${humanize(a.type)}${a.modality === "telehealth" ? html` <span class="pill">Telehealth</span>` : ""}</td>
                   ${mineOnly ? "" : html`<td>${a.clinician_name}</td>`}
                   <td>${badge(a.status)}</td>
                 </tr>`)}</tbody>
