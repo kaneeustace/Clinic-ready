@@ -10,13 +10,34 @@ const DB_PATH = process.env.EHR_DB_PATH || path.join(__dirname, "data", "ehr.sql
 const guard = require("./src/disk-guard");
 (async () => {
   if (guard.diskRequired(DB_PATH)) {
-    try { await guard.waitForDisk(DB_PATH); }
-    catch (e) { console.error(`[disk] ${e.message}`); process.exit(1); }
+    const strict = process.env.EHR_REQUIRE_DISK === "1";
+    try { await guard.waitForDisk(DB_PATH, { timeoutMs: strict ? 90000 : 30000 }); }
+    catch (e) {
+      if (strict) { console.error(`[disk] ${e.message}`); process.exit(1); }
+      console.error(`[disk] WARNING: no persistent disk at ${require("node:path").dirname(DB_PATH)}. Starting anyway; data will be ERASED on every restart or update. Attach a disk there.`);
+    }
   }
   main();
 })();
 
+/** In the container we start as root only to make the mounted disk writable, then drop to EHR_RUN_AS. */
+function dropPrivileges() {
+  const user = process.env.EHR_RUN_AS;
+  if (!user || typeof process.getuid !== "function" || process.getuid() !== 0) return;
+  const fs = require("node:fs");
+  const dir = path.dirname(DB_PATH);
+  try {
+    const { execFileSync } = require("node:child_process");
+    fs.mkdirSync(dir, { recursive: true });
+    execFileSync("chown", ["-R", `${user}:${user}`, dir]);
+  } catch (e) { console.error(`[disk] couldn't hand ${dir} to ${user}: ${e.message}`); }
+  process.setgid(user);
+  process.setuid(user);
+  console.log(`[server] running as ${user}`);
+}
+
 function main() {
+  dropPrivileges();
   const fs = require("node:fs");
   const sizeOf = (f) => { try { return fs.statSync(f).size; } catch { return 0; } };
   const existed = fs.existsSync(DB_PATH);

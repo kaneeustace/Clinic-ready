@@ -6,6 +6,8 @@
  * mount, and if it never appears we exit so the deploy fails and the previous server keeps running.
  *
  *   Active when EHR_DB_PATH is under /var/data (the documented mount) or EHR_REQUIRE_DISK=1. EHR_REQUIRE_DISK=0 turns it off.
+ *   With EHR_REQUIRE_DISK=1 the server refuses to start without the disk; otherwise it waits briefly, then starts
+ *   with a loud warning (the Administration → Data storage card then says data is erased on restart).
  */
 const fs = require("node:fs");
 const path = require("node:path");
