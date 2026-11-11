@@ -27,6 +27,11 @@ function main() {
     console.log(`[db] ${n("SELECT COUNT(*) AS n FROM users")} users, ${n("SELECT COUNT(*) AS n FROM patients")} patients, ${n("SELECT COUNT(*) AS n FROM notes")} notes`);
   } catch { /* first start */ }
 
+  db.prepare("INSERT INTO server_starts (version) VALUES (?)").run(String(process.env.RENDER_GIT_COMMIT || "dev").slice(0, 7));
+  db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  const starts = db.prepare("SELECT COUNT(*) AS n, MIN(started_at) AS first FROM server_starts").get();
+  console.log(`[db] start #${starts.n} of this database (first start ${starts.first} UTC)${starts.n === 1 && existed ? " · WARNING: database file existed but had no start history" : ""}`);
+
   // Fold the write-ahead journal into the main file every 5 minutes and on shutdown, so a stop during a deploy
   // never leaves recent changes only in the journal.
   const checkpoint = () => { try { db.exec("PRAGMA wal_checkpoint(TRUNCATE)"); } catch (e) { console.error("[db] checkpoint failed:", e.message); } };

@@ -510,3 +510,10 @@ CREATE TABLE IF NOT EXISTS appointment_type_colors (
   color TEXT NOT NULL CHECK (color GLOB '#[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]'),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- One row per server start. If the count resets after a deploy, the database didn't survive (disk not kept).
+CREATE TABLE IF NOT EXISTS server_starts (
+  id INTEGER PRIMARY KEY,
+  started_at TEXT NOT NULL DEFAULT (datetime('now')),
+  version TEXT
+);

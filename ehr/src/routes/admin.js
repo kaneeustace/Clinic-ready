@@ -183,18 +183,27 @@ function storageStatus(db) {
   const size = (f) => { try { return fs.statSync(f).size; } catch { return 0; } };
   let created = null;
   try { created = fs.statSync(file).birthtime.toISOString(); } catch { created = null; }
-  return { file, persistent, onRender, sizeKb: Math.round((size(file) + size(file + "-wal")) / 1024), created };
+  let starts = { n: 0, first: null, last: null };
+  try { starts = db.prepare("SELECT COUNT(*) AS n, MIN(started_at) AS first, MAX(started_at) AS last FROM server_starts").get(); } catch { /* old schema */ }
+  return { file, persistent, onRender, sizeKb: Math.round((size(file) + size(file + "-wal")) / 1024), created, starts };
 }
 function storageCard(req) {
   const st = storageStatus(req.db);
+  const survived = st.starts.n > 1;
+  const badge = !st.persistent ? html`<span class="badge badge--bad">Erased on restart</span>`
+    : survived ? html`<span class="badge badge--good">Kept through ${st.starts.n - 1} restart${st.starts.n === 2 ? "" : "s"}</span>`
+    : html`<span class="badge badge--warn">Not yet confirmed</span>`;
   return html`
     <section class="card" id="storage">
-      <div class="card__head"><h2>Data storage</h2>${st.persistent ? html`<span class="badge badge--good">Saved permanently</span>` : html`<span class="badge badge--bad">Erased on restart</span>`}</div>
-      ${st.persistent
-        ? html`<p>The database is on a persistent disk (${st.file}, ${st.sizeKb} KB). Updates and restarts keep your data.</p>
-          ${st.created ? html`<p class="small muted">Database created ${st.created.slice(0, 16).replace("T", " ")} UTC. If this changes after an update, the disk was replaced.</p>` : ""}`
-        : html`<p>The database is on temporary storage${st.file ? ` (${st.file})` : ""}. <strong>Everything is erased each time the app updates or restarts.</strong></p>
-          ${st.onRender ? html`<p class="small">Fix in Render: upgrade the <strong>clinic-ready</strong> service to the Starter plan, add a disk at <code>/var/data</code>, and set <code>EHR_DB_PATH=/var/data/ehr.sqlite</code>.</p>` : ""}`}
+      <div class="card__head"><h2>Data storage</h2>${badge}</div>
+      ${!st.persistent
+        ? html`<p>The database is on temporary storage${st.file ? ` (${st.file})` : ""}. <strong>Everything is erased each time the app updates or restarts.</strong></p>
+          ${st.onRender ? html`<p class="small">Fix in Render: upgrade the <strong>clinic-ready</strong> service to the Starter plan, add a disk at <code>/var/data</code>, and set <code>EHR_DB_PATH=/var/data/ehr.sqlite</code>.</p>` : ""}`
+        : survived
+          ? html`<p>This database has been running since ${st.starts.first} UTC and has survived ${st.starts.n - 1} restart${st.starts.n === 2 ? "" : "s"} or update${st.starts.n === 2 ? "" : "s"}. Your data is being kept.</p>`
+          : html`<p>The database is on a disk (${st.file}), but it hasn't been through a restart yet (first started ${st.starts.first || "just now"} UTC).
+            <strong>If this still says "Not yet confirmed" after the next update, the disk isn't being kept between updates</strong>: check the service's Disk settings in Render.</p>`}
+      <p class="small muted">${st.sizeKb} KB</p>
     </section>`;
 }
 
