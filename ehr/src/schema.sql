@@ -517,3 +517,31 @@ CREATE TABLE IF NOT EXISTS server_starts (
   started_at TEXT NOT NULL DEFAULT (datetime('now')),
   version TEXT
 );
+
+-- Client self check-in on their phone (src/routes/checkin.js). One row per appointment.
+CREATE TABLE IF NOT EXISTS checkins (
+  id INTEGER PRIMARY KEY,
+  appointment_id INTEGER NOT NULL UNIQUE REFERENCES appointments(id) ON DELETE CASCADE,
+  patient_id INTEGER NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
+  token_hash TEXT UNIQUE,
+  token_expires_at TEXT,
+  source TEXT NOT NULL DEFAULT 'link' CHECK (source IN ('link','lobby')),
+  step TEXT NOT NULL DEFAULT 'contact',
+  started_at TEXT,
+  completed_at TEXT,
+  contact_changes TEXT,
+  contact_applied INTEGER NOT NULL DEFAULT 0,
+  insurance_changed INTEGER,
+  insurance_payer TEXT,
+  insurance_member_id TEXT,
+  consent_name TEXT,
+  consent_at TEXT,
+  phq9_id INTEGER REFERENCES assessments(id) ON DELETE SET NULL,
+  gad7_id INTEGER REFERENCES assessments(id) ON DELETE SET NULL,
+  flagged INTEGER NOT NULL DEFAULT 0,
+  reviewed_by INTEGER REFERENCES users(id),
+  reviewed_at TEXT,
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_checkins_patient ON checkins(patient_id, created_at);

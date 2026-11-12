@@ -63,6 +63,7 @@ router.get("/", (req, res) => {
         ${tile("New appointment requests", newRequests, "/ehr/requests")}
         ${tile("Unbilled charges", unbilled, "/ehr/billing")}
       </div>
+      ${require("./checkin").dashboardCard(db, u)}
       ${can(u, "clinical:write") ? renderWorkboard(buildWorkboard(db, u)) : ""}
       ${flags.length ? html`
         <section class="card card--alert">

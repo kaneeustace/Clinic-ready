@@ -157,6 +157,14 @@
       if (sample) sample.style.setProperty("--appt", input.value);
     });
   });
+  // Copy buttons: <button data-copy="text">; read-only inputs select all on focus.
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest("[data-copy]");
+    if (!b) return;
+    var text = b.getAttribute("data-copy"), done = function () { var t = b.textContent; b.textContent = "Copied"; setTimeout(function () { b.textContent = t; }, 1600); };
+    if (navigator.clipboard) navigator.clipboard.writeText(text).then(done, function () {}); else done();
+  });
+  document.querySelectorAll("[data-select-all]").forEach(function (i) { i.addEventListener("focus", function () { i.select(); }); });
   // Live signature countdowns: <span data-deadline="ISO" data-total-hours="24">
   function tick() {
     document.querySelectorAll("[data-deadline]").forEach(function (el) {

@@ -267,6 +267,9 @@ function statusActions(req, a, returnTo) {
     </form>`;
   const out = [];
   if (a.status === "scheduled") out.push(btn("checked_in", "Check in"));
+  if (a.status === "scheduled" && can(req.user, "schedule:write") && String(a.start_at).slice(0, 10) === today()) {
+    out.push(html`<form method="post" action="/ehr/appointments/${a.id}/checkin-link" class="inline-form">${csrfField(req)}<button class="btn btn--sm btn--ghost" type="submit" title="Send the client a link to check in on their phone">Phone check-in link</button></form>`);
+  }
   if ((a.status === "scheduled" || a.status === "checked_in") && started) {
     out.push(btn("completed", "Complete"));
     out.push(btn("no_show", "No-show", "btn--danger"));
@@ -379,6 +382,7 @@ router.get("/schedule", requirePerm("schedule:read"), (req, res) => {
         <h1>Schedule</h1>
         <div class="row">
           <a class="btn btn--sm" href="${link(date, { view: view === "day" ? "week" : "day" })}">${view === "day" ? "Week view" : "Day view"}</a>
+          <a class="btn btn--sm" href="/ehr/checkins">Check-ins</a>
           ${can(u, "schedule:write") ? html`<a class="btn btn--primary" href="/ehr/schedule/new${qs({ date, clinician_id: clinicianId })}">New appointment</a>` : ""}
         </div>
       </div>
