@@ -169,7 +169,7 @@ function stepPage(req, res, c, { error = null, crisis = false } = {}, status = 2
   const token = req.params.token;
   const base = `/checkin/s/${token}`;
   const first = c.preferred_name || c.first_name;
-  const when = html`<p class="ci__appt"><strong>${fmtTime(c.start_at)}</strong> with ${c.clinician_name}${c.modality === "telehealth" ? " · Telehealth" : ""}</p>`;
+  const when = html`<p class="ci__appt"><strong>${fmtTime(c.start_at)}</strong> with ${c.clinician_name}${c.appt_type === "group" ? " · Group" : ""}${c.modality === "telehealth" ? " · Telehealth" : ""}</p>`;
   const err = error ? html`<div class="alert alert--error" role="alert">${error}</div>` : "";
   const crisisBox = crisis ? html`<div class="alert alert--error" role="alert"><strong>Thank you for telling us.</strong> Your care team has been notified and will check on you.
     If you're thinking about hurting yourself right now, call or text <a href="tel:988"><strong>988</strong></a>, or call 911.</div>` : "";
