@@ -91,3 +91,66 @@ test("security: bad or expired tokens, lobby rate limit, staff-only pages", asyn
   for (let i = 0; i < 10; i++) last = await c.post("/checkin", { last_name: "Nobody", dob: "2000-01-01" });
   assert.equal(last.status, 429);
 });
+
+test("returning client: one-tap check-in skips contact, insurance and consent signed in the last 30 days", async () => {
+  const qp = t.ctx.patients[9] || t.ctx.patients[2];
+  t.db.prepare("UPDATE patients SET last_name = 'Repeatson', dob = '1979-09-09' WHERE id = ?").run(qp);
+  t.db.prepare("DELETE FROM appointments WHERE patient_id = ? AND substr(start_at,1,10) = ?").run(qp, today());
+  // An earlier visit 5 days ago with a completed check-in and consent
+  const prev = Number(t.db.prepare(`INSERT INTO appointments (patient_id, clinician_id, start_at, end_at, type, modality, status)
+    VALUES (?, ?, date('now','-5 days') || 'T09:00', date('now','-5 days') || 'T09:50', 'group', 'in_person', 'completed')`).run(qp, t.ctx.users.therapist).lastInsertRowid);
+  t.db.prepare(`INSERT INTO checkins (appointment_id, patient_id, step, started_at, completed_at, consent_name, consent_at)
+    VALUES (?, ?, 'done', datetime('now','-5 days'), datetime('now','-5 days'), 'R Repeatson', datetime('now','-5 days'))`).run(prev, qp);
+  // Screenings done recently, so none are due
+  for (const inst of ["PHQ9", "GAD7"]) t.db.prepare(`INSERT INTO assessments (patient_id, instrument, responses, total_score, severity, administered_on)
+    VALUES (?, ?, '[]', 3, 'minimal', date('now','-3 days'))`).run(qp, inst);
+  const appt = Number(t.db.prepare(`INSERT INTO appointments (patient_id, clinician_id, start_at, end_at, type, modality, status)
+    VALUES (?, ?, ?, ?, 'group', 'in_person', 'scheduled')`).run(qp, t.ctx.users.therapist, `${today()}T23:00`, `${today()}T23:50`).lastInsertRowid);
+  require("../src/routes/checkin").resetRateLimit();
+  const c = t.client();
+  const r = await c.post("/checkin", { last_name: "Repeatson", dob: "1979-09-09" });
+  const base = r.location.replace(/^https?:\/\/[^/]+/, "");
+  const page = await c.get(base);
+  assert.match(page.text, /Welcome back/);
+  const done = await c.post(`${base}/quick`, { action: "checkin" });
+  assert.equal(done.status, 303);
+  assert.match((await c.get(base)).text, /checked in/);
+  assert.equal(t.db.prepare("SELECT status FROM appointments WHERE id = ?").get(appt).status, "checked_in");
+  const ci = t.db.prepare("SELECT * FROM checkins WHERE appointment_id = ?").get(appt);
+  assert.equal(ci.quick, 1);
+  // Staff review shows the consent on file
+  const staff = await t.login("frontdesk");
+  assert.match((await staff.get(`/ehr/checkins/${ci.id}`)).text, /On file: signed by <strong>R Repeatson/);
+});
+
+test("returning client can still choose to update contact details and insurance", async () => {
+  const qp = t.ctx.patients[9] || t.ctx.patients[2];
+  const appt = Number(t.db.prepare(`INSERT INTO appointments (patient_id, clinician_id, start_at, end_at, type, modality, status)
+    VALUES (?, ?, ?, ?, 'therapy', 'in_person', 'scheduled')`).run(qp, t.ctx.users.therapist2, `${today()}T23:30`, `${today()}T23:55`).lastInsertRowid);
+  const tok = require("../src/routes/checkin").newToken(t.db, appt, qp);
+  const c = t.client();
+  assert.match((await c.get(`/checkin/s/${tok}`)).text, /Welcome back/);
+  await c.post(`/checkin/s/${tok}/quick`, { action: "update" });
+  assert.match((await c.get(`/checkin/s/${tok}`)).text, /Is your contact information still correct/);
+  await c.post(`/checkin/s/${tok}/contact`, { same: "1" });
+  assert.match((await c.get(`/checkin/s/${tok}`)).text, /Has your insurance changed/);
+  await c.post(`/checkin/s/${tok}/insurance`, { changed: "0" });
+  // consent still on file from 5 days ago -> done
+  assert.match((await c.get(`/checkin/s/${tok}`)).text, /checked in/);
+});
+
+test("group roster: one card per group session with how many are here", async () => {
+  const [g1, g2, g3] = [t.ctx.patients[3], t.ctx.patients[4], t.ctx.patients[5]];
+  const ids = [g1, g2, g3].map((pid) => Number(t.db.prepare(`INSERT INTO appointments (patient_id, clinician_id, start_at, end_at, type, modality, status)
+    VALUES (?, ?, ?, ?, 'group', 'in_person', 'scheduled')`).run(pid, t.ctx.users.therapist2, `${today()}T22:00`, `${today()}T22:50`).lastInsertRowid));
+  t.db.prepare("UPDATE appointments SET status = 'checked_in' WHERE id = ?").run(ids[0]);
+  t.db.prepare("UPDATE appointments SET status = 'no_show' WHERE id = ?").run(ids[2]);
+  const staff = await t.login("frontdesk");
+  const pg = await staff.get("/ehr/checkins");
+  assert.equal(pg.status, 200);
+  assert.match(pg.text, /Group sessions/);
+  assert.match(pg.text, /<b>1<\/b> of 2 here/);
+  assert.match(pg.text, /Not here yet/);
+  assert.match(pg.text, /No-show/);
+  assert.match(pg.text, /Individual appointments/);
+});

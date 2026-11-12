@@ -539,6 +539,7 @@ CREATE TABLE IF NOT EXISTS checkins (
   phq9_id INTEGER REFERENCES assessments(id) ON DELETE SET NULL,
   gad7_id INTEGER REFERENCES assessments(id) ON DELETE SET NULL,
   flagged INTEGER NOT NULL DEFAULT 0,
+  quick INTEGER NOT NULL DEFAULT 0,
   reviewed_by INTEGER REFERENCES users(id),
   reviewed_at TEXT,
   created_by INTEGER REFERENCES users(id),

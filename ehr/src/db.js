@@ -31,6 +31,9 @@ function migrate(db, schema) {
   ];
   // Columns added after first release (ALTER TABLE ADD COLUMN is safe and instant in SQLite).
   const ADD_COLUMNS = {
+    checkins: [
+      ["quick", "INTEGER NOT NULL DEFAULT 0"],              // returning client: one-tap check-in (routes/checkin.js)
+    ],
     // HIPAA hardening (see docs/hipaa/)
     users: [
       ["supervisor_id", "INTEGER REFERENCES users(id)"],  // clinical supervisor who co-signs this user's notes

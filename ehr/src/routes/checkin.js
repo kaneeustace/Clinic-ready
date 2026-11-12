@@ -34,7 +34,9 @@ const mailer = require("../mailer");
 const publicRouter = express.Router();
 const router = express.Router();
 const sha = (s) => crypto.createHash("sha256").update(String(s)).digest("hex");
-const STEPS = ["contact", "insurance", "card-back", "phq9", "gad7", "consent", "done"];
+const STEPS = ["quick", "contact", "insurance", "card-back", "phq9", "gad7", "consent", "done"];
+/** Returning clients who checked in within this many days get a one-tap check-in (EHR_CHECKIN_REPEAT_DAYS). */
+const REPEAT_DAYS = () => Math.max(0, Math.min(365, Number(process.env.EHR_CHECKIN_REPEAT_DAYS || 30) || 30));
 const SCREEN_EVERY_DAYS = 14;
 const MAX_IMAGE = 5 * 1024 * 1024;
 
@@ -68,11 +70,26 @@ function dueScreens(db, patientId) {
   return { phq9: !recent("PHQ9"), gad7: !recent("GAD7") };
 }
 
+/** Most recent completed check-in for this client (other appointments) within REPEAT_DAYS, and the latest consent. */
+function recentCheckin(db, c) {
+  const days = REPEAT_DAYS();
+  if (!days) return { recent: null, consent: null };
+  const recent = db.prepare(`SELECT id, completed_at FROM checkins WHERE patient_id = ? AND id <> ? AND completed_at >= datetime('now', ?)
+    ORDER BY completed_at DESC LIMIT 1`).get(c.patient_id, c.id, `-${days} days`) || null;
+  const consent = db.prepare(`SELECT consent_at, consent_name FROM checkins WHERE patient_id = ? AND id <> ? AND consent_at >= datetime('now', ?)
+    ORDER BY consent_at DESC LIMIT 1`).get(c.patient_id, c.id, `-${days} days`) || null;
+  return { recent, consent };
+}
+
 function nextStep(db, c, from) {
   const due = dueScreens(db, c.patient_id);
+  const { consent } = recentCheckin(db, c);
   let i = STEPS.indexOf(from) + 1;
   while (i < STEPS.length) {
     const s = STEPS[i];
+    if (s === "quick") { i++; continue; }
+    if ((s === "contact" || s === "insurance") && c.quick) { i++; continue; }
+    if (s === "consent" && consent && !c.consent_at) { i++; continue; }
     if (s === "card-back" && !c.insurance_changed) { i++; continue; }
     if (s === "phq9" && !due.phq9 && !c.phq9_id) { i++; continue; }
     if (s === "gad7" && !due.gad7 && !c.gad7_id) { i++; continue; }
@@ -165,6 +182,18 @@ function stepPage(req, res, c, { error = null, crisis = false } = {}, status = 2
       ${crisisBox}
       <p>${c.modality === "telehealth" ? "Your clinician will start your video visit shortly." : "Please have a seat. Your clinician will come get you."}</p>` });
   }
+  if (s === "quick") {
+    const { recent } = recentCheckin(req.db, c);
+    const due = dueScreens(req.db, c.patient_id);
+    return clientPage(req, res, { title: "Check in", status, body: html`
+      <h1>Welcome back, ${first}</h1>${when}${err}
+      <p>You checked in with us ${recent ? fmtDate(recent.completed_at.slice(0, 10)) : "recently"}, so we already have your contact information, insurance and consent.</p>
+      ${due.phq9 || due.gad7 ? html`<p class="hint">You'll answer a few quick questions about how you've been feeling.</p>` : ""}
+      <form method="post" action="${base}/quick" class="stack">
+        <button class="btn btn--primary ci__btn" type="submit" name="action" value="checkin">${due.phq9 || due.gad7 ? "Continue" : "Check in"}</button>
+        <button class="btn btn--ghost ci__btn" type="submit" name="action" value="update">My phone, address or insurance changed</button>
+      </form>` });
+  }
   if (s === "contact") {
     return clientPage(req, res, { title: "Check in", step: s, status, body: html`
       <h1>Hi ${first}</h1>${when}${err}
@@ -243,6 +272,11 @@ publicRouter.get("/s/:token", (req, res) => {
   if (!c.started_at) {
     req.db.prepare("UPDATE checkins SET started_at = datetime('now') WHERE id = ?").run(c.id);
     audit(sysReq(req), "checkin_opened", "appointment", c.appointment_id, c.patient_id, c.source);
+    const { recent } = recentCheckin(req.db, c);
+    if (recent && c.step === "contact") {
+      req.db.prepare("UPDATE checkins SET step = 'quick', quick = 1 WHERE id = ?").run(c.id);
+      c.step = "quick"; c.quick = 1;
+    }
   }
   // After a positive safety item the redirect carries ?c=1 so the client sees crisis resources.
   stepPage(req, res, c, { crisis: req.query.c === "1" && !!c.flagged });
@@ -259,8 +293,23 @@ publicRouter.post("/s/:token/:step", (req, res) => {
     const fresh = db.prepare("SELECT * FROM checkins WHERE id = ?").get(c.id);
     const nxt = nextStep(db, { ...fresh, ...opts.override }, step);
     db.prepare(`UPDATE checkins SET step = ?${extraSql} WHERE id = ?`).run(nxt, ...args, c.id);
+    if (nxt === "done") return complete(opts.crisis || fresh.flagged);
     res.redirect(303, `/checkin/s/${req.params.token}${opts.crisis ? "?c=1" : ""}`);
   };
+  const complete = (crisis) => {
+    db.prepare("UPDATE checkins SET step = 'done', completed_at = datetime('now') WHERE id = ?").run(c.id);
+    db.prepare("UPDATE appointments SET status = 'checked_in' WHERE id = ? AND status = 'scheduled'").run(c.appointment_id);
+    audit(sysReq(req), "checkin_completed", "appointment", c.appointment_id, c.patient_id, `${c.source}${c.quick ? " quick" : ""}`);
+    res.redirect(303, `/checkin/s/${req.params.token}${crisis ? "?c=1" : ""}`);
+  };
+
+  if (step === "quick") {
+    if (b.action === "update") {
+      db.prepare("UPDATE checkins SET quick = 0, step = 'contact' WHERE id = ?").run(c.id);
+      return res.redirect(303, `/checkin/s/${req.params.token}`);
+    }
+    return advance("", [], { override: { quick: 1 } });
+  }
 
   if (step === "contact") {
     if (b.same === "1") return advance();
@@ -305,10 +354,8 @@ publicRouter.post("/s/:token/:step", (req, res) => {
   if (step === "consent") {
     const sig = String(b.signature || "").trim().slice(0, 120);
     if (b.agree !== "1" || sig.length < 3) return stepPage(req, res, c, { error: "Check the box and type your full name to sign." }, 400);
-    db.prepare("UPDATE checkins SET consent_name = ?, consent_at = datetime('now'), step = 'done', completed_at = datetime('now') WHERE id = ?").run(sig, c.id);
-    db.prepare("UPDATE appointments SET status = 'checked_in' WHERE id = ? AND status = 'scheduled'").run(c.appointment_id);
-    audit(sysReq(req), "checkin_completed", "appointment", c.appointment_id, c.patient_id, c.source);
-    return res.redirect(303, `/checkin/s/${req.params.token}${c.flagged ? "?c=1" : ""}`);
+    db.prepare("UPDATE checkins SET consent_name = ?, consent_at = datetime('now') WHERE id = ?").run(sig, c.id);
+    return complete(c.flagged);
   }
   res.redirect(303, `/checkin/s/${req.params.token}`);
 });
@@ -405,20 +452,66 @@ function dashboardCard(db, user) {
     </section>`;
 }
 
+/** Check-in state of one appointment, for the roster. */
+function rosterStatus(r) {
+  if (r.status === "cancelled" || r.status === "late_cancel") return { key: "cancelled", label: "Cancelled", tone: "muted" };
+  if (r.status === "no_show") return { key: "no_show", label: "No-show", tone: "bad" };
+  if (r.completed_at || r.status === "checked_in" || r.status === "completed") return { key: "in", label: r.completed_at ? "Checked in" : "Checked in by staff", tone: "good" };
+  if (r.started_at) return { key: "progress", label: "Checking in…", tone: "warn" };
+  if (r.checkin_id) return { key: "link", label: "Link sent", tone: "info" };
+  return { key: "waiting", label: "Not here yet", tone: "muted" };
+}
+
 router.get("/checkins", requirePerm("schedule:read"), (req, res) => {
   const day = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date || "")) ? String(req.query.date) : today();
-  const rows = req.db.prepare(`${checkinSelect} WHERE substr(a.start_at,1,10) = ? ORDER BY a.start_at`).all(day);
+  const mine = req.user.role === "clinician" && req.query.all !== "1";
+  const rows = req.db.prepare(`SELECT a.id AS appt_id, a.start_at, a.end_at, a.type, a.modality, a.status, a.clinician_id, u.name AS clinician_name,
+      p.id AS patient_id, p.first_name, p.last_name, p.preferred_name,
+      c.id AS checkin_id, c.started_at, c.completed_at, c.flagged, c.contact_changes, c.contact_applied, c.insurance_changed, c.reviewed_at, c.quick,
+      (SELECT total_score FROM assessments WHERE id = c.phq9_id) AS phq9_total, (SELECT total_score FROM assessments WHERE id = c.gad7_id) AS gad7_total
+    FROM appointments a JOIN patients p ON p.id = a.patient_id JOIN users u ON u.id = a.clinician_id LEFT JOIN checkins c ON c.appointment_id = a.id
+    WHERE substr(a.start_at,1,10) = ? ${mine ? "AND a.clinician_id = ?" : ""}
+    ORDER BY a.start_at, u.name, p.last_name`).all(day, ...(mine ? [req.user.id] : []));
+  // Group sessions: same start time, clinician and type 'group'.
+  const groups = new Map();
+  const singles = [];
+  for (const r of rows) {
+    if (r.type === "group") {
+      const k = `${r.start_at}|${r.clinician_id}`;
+      if (!groups.has(k)) groups.set(k, { start_at: r.start_at, end_at: r.end_at, clinician_name: r.clinician_name, modality: r.modality, members: [] });
+      groups.get(k).members.push(r);
+    } else singles.push(r);
+  }
   audit(req, "view", "checkins", null, null, day);
+  const memberRow = (r, { single = false } = {}) => {
+    const st = rosterStatus(r);
+    return html`<li class="roster__row roster__row--${st.key}">
+      ${single ? html`<span class="roster__time">${fmtTime(r.start_at)}</span>` : ""}
+      <span class="roster__name">${r.checkin_id ? html`<a href="/ehr/checkins/${r.checkin_id}">${patientName(r)}</a>` : html`<a href="/ehr/appointments/${r.appt_id}">${patientName(r)}</a>`}</span>
+      <span class="badge badge--${st.tone}">${st.label}</span>
+      ${r.completed_at ? html`<span class="muted small">${fmtTimestamp(r.completed_at).replace(/^.*?\d{4},? /, "")}${r.quick ? " · one-tap" : ""}</span>` : ""}
+      ${checkinBadges(r)}${r.reviewed_at ? html`<span class="badge badge--good">Reviewed</span>` : ""}
+      ${single ? html`<span class="muted small roster__clin">${r.clinician_name}</span>` : ""}</li>`;
+  };
+  const counted = (list) => {
+    const active = list.filter((r) => !["cancelled", "no_show"].includes(rosterStatus(r).key));
+    return { here: active.filter((r) => rosterStatus(r).key === "in").length, total: active.length };
+  };
   res.send(page(req, { title: "Check-ins", active: "schedule", body: html`
-    <div class="page-head"><div><h1>Client check-ins</h1><p>${fmtDate(day)} · clients can check in at <strong>${publicBase(req)}/checkin</strong></p></div>
-      <a class="btn btn--sm" href="/ehr/schedule">Schedule</a></div>
-    <section class="card">${rows.length ? html`<div class="table-wrap"><table class="table">
-      <thead><tr><th>Time</th><th>Client</th><th>Clinician</th><th>Status</th><th>Needs review</th></tr></thead>
-      <tbody>${rows.map((c) => html`<tr>
-        <td>${fmtTime(c.start_at)}</td><td><a href="/ehr/checkins/${c.id}">${patientName(c)}</a></td><td>${c.clinician_name}</td>
-        <td>${c.completed_at ? html`<span class="badge badge--good">Checked in</span>` : c.started_at ? html`<span class="badge badge--warn">In progress</span>` : html`<span class="badge badge--muted">Link sent</span>`}</td>
-        <td>${checkinBadges(c)}${c.reviewed_at ? html` <span class="badge badge--good">Reviewed</span>` : ""}</td></tr>`)}</tbody></table></div>`
-      : html`<p class="muted">No check-ins for this day yet.</p>`}</section>` }));
+    <div class="page-head"><div><h1>Check-ins</h1><p>${fmtDate(day)}${mine ? " · your sessions" : ""} · clients check in at <strong>${publicBase(req)}/checkin</strong></p></div>
+      <div class="row">${req.user.role === "clinician" ? html`<a class="btn btn--sm" href="/ehr/checkins?date=${day}${mine ? "&all=1" : ""}">${mine ? "Show everyone" : "Only mine"}</a>` : ""}<a class="btn btn--sm" href="/ehr/schedule">Schedule</a></div></div>
+    ${groups.size ? html`<h2 class="section-title">Group sessions</h2>
+      <div class="roster-grid">${[...groups.values()].map((g) => { const n = counted(g.members); return html`
+        <section class="card roster">
+          <div class="roster__head">
+            <div><strong>${fmtTime(g.start_at)}–${fmtTime(g.end_at)} group</strong><div class="muted small">${g.clinician_name}${g.modality === "telehealth" ? " · Telehealth" : ""}</div></div>
+            <div class="roster__count"><b>${n.here}</b> of ${n.total} here</div>
+          </div>
+          <div class="roster__bar" aria-hidden="true"><i style="width:${n.total ? Math.round((n.here / n.total) * 100) : 0}%"></i></div>
+          <ul class="roster__list">${g.members.map(memberRow)}</ul>
+        </section>`; })}</div>` : ""}
+    <h2 class="section-title">${groups.size ? "Individual appointments" : "Appointments"}</h2>
+    <section class="card">${singles.length ? html`<ul class="roster__list">${singles.map((r) => memberRow(r, { single: true }))}</ul>` : html`<p class="muted">No individual appointments.</p>`}</section>` }));
 });
 
 const FIELD_LABEL = { phone: "Phone", email: "Email", address_line1: "Street address", city: "City", state: "State", zip: "ZIP" };
@@ -431,6 +524,7 @@ router.get("/checkins/:id", requirePerm("schedule:read"), (req, res) => {
   const pt = req.db.prepare("SELECT * FROM patients WHERE id = ?").get(c.patient_id);
   const cards = req.db.prepare("SELECT id, category FROM patient_images WHERE patient_id = ? AND uploaded_by IS NULL AND category IN ('insurance_front','insurance_back') AND created_at >= ? ORDER BY id").all(c.patient_id, c.created_at.slice(0, 10));
   const canWrite = can(req.user, "patients:write");
+  const prior = c.consent_at ? null : req.db.prepare("SELECT consent_name, consent_at FROM checkins WHERE patient_id = ? AND id <> ? AND consent_at IS NOT NULL ORDER BY consent_at DESC LIMIT 1").get(c.patient_id, c.id);
   res.send(page(req, { title: `Check-in · ${patientName(c)}`, active: "schedule", body: html`
     <div class="page-head"><div><h1>${patientName(c)}</h1><p>${fmtTime(c.start_at)} with ${c.clinician_name} · ${c.completed_at ? `checked in ${fmtTimestamp(c.completed_at)}` : "not finished"}</p></div>
       <div class="row"><a class="btn btn--sm" href="/ehr/patients/${c.patient_id}">Open chart</a><a class="btn btn--sm" href="/ehr/checkins">All check-ins</a></div></div>
@@ -454,7 +548,9 @@ router.get("/checkins/:id", requirePerm("schedule:read"), (req, res) => {
           <a class="btn btn--sm" href="/ehr/patients/${c.patient_id}/measures">See measures</a>`}
       </section>
       <section class="card"><h2>Consent</h2>
-        ${c.consent_at ? html`<p>Signed by typing <strong>${c.consent_name}</strong> on ${fmtTimestamp(c.consent_at)}.</p>` : html`<p class="muted">Not signed.</p>`}
+        ${c.consent_at ? html`<p>Signed by typing <strong>${c.consent_name}</strong> on ${fmtTimestamp(c.consent_at)}.</p>`
+          : prior ? html`<p>On file: signed by <strong>${prior.consent_name}</strong> on ${fmtTimestamp(prior.consent_at)}${c.quick ? " (returning client, one-tap check-in)" : ""}.</p>`
+          : html`<p class="muted">Not signed.</p>`}
         ${c.reviewed_at ? html`<p class="badge badge--good">Reviewed</p>` : html`<form method="post" action="/ehr/checkins/${c.id}/reviewed">${csrfField(req)}<button class="btn btn--sm" type="submit">Mark reviewed</button></form>`}
       </section>
     </div>` }));
@@ -482,4 +578,4 @@ router.post("/checkins/:id/reviewed", requirePerm("schedule:read"), (req, res) =
   res.redirect(`/ehr/checkins/${c.id}`);
 });
 
-module.exports = { router, publicRouter, dashboardCard, todaysCheckins, newToken, sha };
+module.exports = { router, publicRouter, dashboardCard, todaysCheckins, newToken, sha, resetRateLimit: () => attempts.clear() };
