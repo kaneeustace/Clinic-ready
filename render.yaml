@@ -74,6 +74,18 @@ services:
         sync: false
       - key: EHR_SMTP_PASS
         sync: false
+      # Site address used in emailed/texted check-in links.
+      - key: EHR_PUBLIC_URL
+        sync: false
+      # Automatic check-in links before appointments (email and/or text). Texts go through Twilio (sign its BAA).
+      - key: EHR_CHECKIN_LEAD_MINUTES
+        value: "60"
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_FROM
+        sync: false
       - key: EHR_DIGEST_TIME
         value: "16:30"
       - key: EHR_DIGEST_DAYS

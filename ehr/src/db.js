@@ -33,6 +33,8 @@ function migrate(db, schema) {
   const ADD_COLUMNS = {
     checkins: [
       ["quick", "INTEGER NOT NULL DEFAULT 0"],              // returning client: one-tap check-in (routes/checkin.js)
+      ["link_sent_at", "TEXT"],                              // when the check-in link was emailed/texted automatically
+      ["link_sent_via", "TEXT"],
     ],
     // HIPAA hardening (see docs/hipaa/)
     users: [

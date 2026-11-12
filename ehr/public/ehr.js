@@ -165,6 +165,18 @@
     if (navigator.clipboard) navigator.clipboard.writeText(text).then(done, function () {}); else done();
   });
   document.querySelectorAll("[data-select-all]").forEach(function (i) { i.addEventListener("focus", function () { i.select(); }); });
+  // Front-desk kiosk: go back to the start screen after inactivity, and a few seconds after a finished check-in.
+  var kiosk = document.querySelector("[data-kiosk]");
+  if (kiosk) {
+    var home = kiosk.getAttribute("data-kiosk-home") || "/checkin/kiosk";
+    var idle = (Number(kiosk.getAttribute("data-kiosk")) || 90) * 1000, kt;
+    var resetKiosk = function () { location.replace(home); };
+    var arm = function () { clearTimeout(kt); kt = setTimeout(resetKiosk, idle); };
+    ["touchstart", "pointerdown", "keydown", "input", "scroll"].forEach(function (ev) { document.addEventListener(ev, arm, { passive: true }); });
+    arm();
+    var doneEl = document.querySelector("[data-kiosk-done]");
+    if (doneEl) setTimeout(resetKiosk, (Number(doneEl.getAttribute("data-kiosk-done")) || 10) * 1000);
+  }
   // Live signature countdowns: <span data-deadline="ISO" data-total-hours="24">
   function tick() {
     document.querySelectorAll("[data-deadline]").forEach(function (el) {

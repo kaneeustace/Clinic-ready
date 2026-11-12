@@ -80,6 +80,9 @@ function main() {
   // End-of-day outstanding-notes emails (counts only, no PHI). Needs EHR_MAIL_PROVIDER; see src/digest.js.
   require("./src/digest").scheduleDigests(db);
 
+  // Automatic check-in links before appointments (email/text; see src/checkin-reminders.js).
+  require("./src/checkin-reminders").scheduleCheckinReminders(db);
+
   createApp(db).listen(PORT, () => {
     console.log(`Clinic Ready running at http://localhost:${PORT}  (EHR: http://localhost:${PORT}/ehr)`);
   });

@@ -30,6 +30,7 @@ const { INSTRUMENTS, scoreInstrument } = require("./clinical");
 const { getClinic } = require("../clinic");
 const { sniff } = require("./photos");
 const mailer = require("../mailer");
+const sms = require("../sms");
 
 const publicRouter = express.Router();
 const router = express.Router();
@@ -39,6 +40,26 @@ const STEPS = ["quick", "contact", "insurance", "card-back", "phq9", "gad7", "co
 const REPEAT_DAYS = () => Math.max(0, Math.min(365, Number(process.env.EHR_CHECKIN_REPEAT_DAYS || 30) || 30));
 const SCREEN_EVERY_DAYS = 14;
 const MAX_IMAGE = 5 * 1024 * 1024;
+
+/* ---------------- kiosk (front-desk iPad) ---------------- */
+const KIOSK_COOKIE = "ci_kiosk";
+const KIOSK_IDLE_SECONDS = 90;
+function readCookie(req, name) {
+  for (const part of String(req.headers.cookie || "").split(";")) {
+    const i = part.indexOf("=");
+    if (i > 0 && part.slice(0, i).trim() === name) { try { return decodeURIComponent(part.slice(i + 1).trim()); } catch { return null; } }
+  }
+  return null;
+}
+const secureCookie = (req) => process.env.NODE_ENV === "production" || req.secure;
+/** The kiosk this device is registered as, or null. */
+function kioskOf(req) {
+  const t = readCookie(req, KIOSK_COOKIE);
+  if (!t || !/^[A-Za-z0-9_-]{30,64}$/.test(t)) return null;
+  const k = req.db.prepare("SELECT id, name FROM checkin_kiosks WHERE token_hash = ? AND revoked_at IS NULL").get(sha(t));
+  if (k) req.db.prepare("UPDATE checkin_kiosks SET last_used_at = datetime('now') WHERE id = ? AND (last_used_at IS NULL OR last_used_at < datetime('now','-5 minutes'))").run(k.id);
+  return k || null;
+}
 
 /* ---------------- helpers ---------------- */
 const sysReq = (req) => ({ db: req.db, user: null, ip: req.ip });
@@ -106,8 +127,9 @@ function clientPage(req, res, { title, body, step = null, status = 200 }) {
     title,
     bare: true,
     body: html`
-      <div class="ci">
-        <header class="ci__head">${require("../views").brandMark(c)}<span>${c.name}</span></header>
+      <div class="ci${req.kiosk ? " ci--kiosk" : ""}" ${req.kiosk ? raw(`data-kiosk="${KIOSK_IDLE_SECONDS}" data-kiosk-home="/checkin/kiosk${req.params && req.params.token ? `?end=${encodeURIComponent(req.params.token)}` : ""}"`) : ""}>
+        <header class="ci__head">${require("../views").brandMark(c)}<span>${c.name}</span>
+          ${req.kiosk && req.params && req.params.token ? html`<a class="btn btn--sm btn--ghost ci__restart" href="/checkin/kiosk?end=${req.params.token}">Start over</a>` : ""}</header>
         ${idx >= 0 ? html`<div class="ci__progress" aria-label="Step ${idx + 1} of 4"><i style="width:${((idx + 1) / 4) * 100}%"></i></div>
           <p class="ci__step">Step ${idx + 1} of 4</p>` : ""}
         <main class="ci__card">${body}</main>
@@ -118,24 +140,25 @@ function clientPage(req, res, { title, body, step = null, status = 200 }) {
 
 /* ---------------- rate limit for the lobby lookup ---------------- */
 const attempts = new Map();
-function limited(ip) {
+function limited(ip, max = 8) {
   const now = Date.now();
   const a = attempts.get(ip) || { n: 0, reset: now + 15 * 60e3 };
   if (now > a.reset) { a.n = 0; a.reset = now + 15 * 60e3; }
   a.n++;
   attempts.set(ip, a);
   if (attempts.size > 5000) for (const [k, v] of attempts) if (now > v.reset) attempts.delete(k);
-  return a.n > 8;
+  return a.n > max;
 }
 
 /* ================= Client pages ================= */
 const bigForm = express.urlencoded({ extended: false, limit: "12mb" });
 const smallForm = express.urlencoded({ extended: false, limit: "50kb" });
 publicRouter.use((req, res, next) => (req.method === "POST" && /\/(insurance|card-back)\/?$/.test(req.path) ? bigForm : smallForm)(req, res, next));
+publicRouter.use((req, res, next) => { req.kiosk = kioskOf(req); next(); });
 
 function lobbyForm(req, res, { error = null, values = {} } = {}, status = 200) {
   clientPage(req, res, { title: "Check in", status, body: html`
-    <h1>Check in for your appointment</h1>
+    <h1>${req.kiosk ? "Welcome! Check in here" : "Check in for your appointment"}</h1>
     <p class="muted">Enter your last name and date of birth to find today's appointment.</p>
     ${error ? html`<div class="alert alert--error" role="alert">${error}</div>` : ""}
     <form method="post" action="/checkin" class="stack" autocomplete="off">
@@ -147,9 +170,23 @@ function lobbyForm(req, res, { error = null, values = {} } = {}, status = 200) {
 
 publicRouter.get("/", (req, res) => lobbyForm(req, res));
 
+/** Front-desk kiosk start screen. ?end=TOKEN closes the previous client's check-in on this device. */
+publicRouter.get("/kiosk", (req, res) => {
+  if (!req.kiosk) {
+    return clientPage(req, res, { title: "Kiosk not set up", status: 403, body: html`<h1>This device isn't a check-in kiosk yet</h1>
+      <p>Staff: sign in to the EHR on this device, open <strong>Schedule → Check-ins → Set up a kiosk</strong>, and tap <strong>Make this device a kiosk</strong>.</p>
+      <p>Clients can still <a href="/checkin">check in here</a>.</p>` });
+  }
+  const end = String(req.query.end || "");
+  if (/^[A-Za-z0-9_-]{20,64}$/.test(end)) {
+    req.db.prepare("UPDATE checkins SET token_expires_at = datetime('now') WHERE token_hash = ? AND source = 'lobby'").run(sha(end));
+  }
+  lobbyForm(req, res);
+});
+
 publicRouter.post("/", (req, res) => {
   const values = { last_name: String((req.body || {}).last_name || "").trim().slice(0, 80), dob: String((req.body || {}).dob || "").slice(0, 10) };
-  if (limited(req.ip)) return lobbyForm(req, res, { error: "Too many tries. Please check in with the front desk.", values }, 429);
+  if (req.kiosk ? limited(`kiosk:${req.kiosk.id}`, 120) : limited(req.ip)) return lobbyForm(req, res, { error: "Too many tries. Please check in with the front desk.", values }, 429);
   if (!values.last_name || !/^\d{4}-\d{2}-\d{2}$/.test(values.dob)) return lobbyForm(req, res, { error: "Enter your last name and date of birth.", values }, 400);
   const day = today();
   const rows = req.db.prepare(`SELECT a.id, a.patient_id FROM appointments a JOIN patients p ON p.id = a.patient_id
@@ -161,7 +198,7 @@ publicRouter.post("/", (req, res) => {
   }
   const a = rows[0];
   const token = newToken(req.db, a.id, a.patient_id, { source: "lobby" });
-  audit(sysReq(req), "checkin_started", "appointment", a.id, a.patient_id, "lobby");
+  audit(sysReq(req), "checkin_started", "appointment", a.id, a.patient_id, req.kiosk ? `kiosk: ${req.kiosk.name}` : "lobby");
   res.redirect(303, `/checkin/s/${token}`);
 });
 
@@ -180,7 +217,8 @@ function stepPage(req, res, c, { error = null, crisis = false } = {}, status = 2
       <h1>You're checked in, ${first}.</h1>
       ${when}
       ${crisisBox}
-      <p>${c.modality === "telehealth" ? "Your clinician will start your video visit shortly." : "Please have a seat. Your clinician will come get you."}</p>` });
+      <p>${c.modality === "telehealth" ? "Your clinician will start your video visit shortly." : "Please have a seat. Your clinician will come get you."}</p>
+      ${req.kiosk ? html`<p class="hint" data-kiosk-done="10">This screen resets for the next person in a few seconds.</p>` : ""}` });
   }
   if (s === "quick") {
     const { recent } = recentCheckin(req.db, c);
@@ -299,7 +337,8 @@ publicRouter.post("/s/:token/:step", (req, res) => {
   const complete = (crisis) => {
     db.prepare("UPDATE checkins SET step = 'done', completed_at = datetime('now') WHERE id = ?").run(c.id);
     db.prepare("UPDATE appointments SET status = 'checked_in' WHERE id = ? AND status = 'scheduled'").run(c.appointment_id);
-    audit(sysReq(req), "checkin_completed", "appointment", c.appointment_id, c.patient_id, `${c.source}${c.quick ? " quick" : ""}`);
+    audit(sysReq(req), "checkin_completed", "appointment", c.appointment_id, c.patient_id, `${c.source}${c.quick ? " quick" : ""}${req.kiosk ? " kiosk" : ""}`);
+    if (req.kiosk) db.prepare("UPDATE checkins SET token_expires_at = datetime('now','+2 minutes') WHERE id = ?").run(c.id);
     res.redirect(303, `/checkin/s/${req.params.token}${crisis ? "?c=1" : ""}`);
   };
 
@@ -390,6 +429,20 @@ router.post("/appointments/:id/checkin-link", requirePerm("schedule:write"), asy
   const url = `${publicBase(req)}/checkin/s/${token}`;
   audit(req, "checkin_link_created", "appointment", a.id, a.patient_id);
   let emailed = null;
+  if ((req.body || {}).send === "text") {
+    const sc = sms.smsConfig();
+    const ph = req.db.prepare("SELECT phone FROM patients WHERE id = ?").get(a.patient_id).phone;
+    if (!ph || !sms.toE164(ph)) emailed = "This client has no mobile number on file.";
+    else if (!sc.enabled) emailed = "Texting isn't set up yet (see Check-ins → Automatic links).";
+    else {
+      try {
+        await sms.sendSms({ to: ph, body: `${getClinic(req.db).name}: check in for your appointment today from your phone: ${url} (link works today only).` }, sc);
+        emailed = "texted";
+        req.db.prepare("UPDATE checkins SET link_sent_at = datetime('now'), link_sent_via = 'text' WHERE appointment_id = ?").run(a.id);
+        audit(req, "checkin_link_texted", "appointment", a.id, a.patient_id);
+      } catch (e) { emailed = `Text failed: ${String(e.message || e).slice(0, 160)}`; }
+    }
+  }
   if ((req.body || {}).send === "email") {
     const mc = mailer.mailConfig();
     if (!a.email) emailed = "This client has no email address on file.";
@@ -401,6 +454,7 @@ router.post("/appointments/:id/checkin-link", requirePerm("schedule:write"), asy
           text: `Hello,\n\nYou can check in for today's appointment with ${clinic} from your phone:\n${url}\n\nThe link works today only.\n\nIn crisis? Call or text 988.`,
           html: `<p>Hello,</p><p>You can check in for today's appointment with ${clinic.replace(/[<>&]/g, "")} from your phone.</p><p><a href="${url}" style="display:inline-block;background:#315de7;color:#fff;padding:12px 18px;border-radius:10px;text-decoration:none;font-weight:600">Check in now</a></p><p style="color:#5d6b7e;font-size:13px">The link works today only. In crisis? Call or text 988.</p>` }, mc);
         emailed = "sent";
+        req.db.prepare("UPDATE checkins SET link_sent_at = datetime('now'), link_sent_via = 'email' WHERE appointment_id = ?").run(a.id);
         audit(req, "checkin_link_emailed", "appointment", a.id, a.patient_id);
       } catch (e) { emailed = `Email failed: ${String(e.message || e).slice(0, 160)}`; }
     }
@@ -409,9 +463,10 @@ router.post("/appointments/:id/checkin-link", requirePerm("schedule:write"), asy
     <div class="page-head"><h1>Check-in link</h1><a class="btn btn--sm" href="/ehr/appointments/${a.id}">Back to appointment</a></div>
     <section class="card stack">
       <p>Send this link to <strong>${patientName(a)}</strong> by text or email. It works today only and is for this appointment.</p>
-      ${emailed === "sent" ? html`<div class="alert alert--success">Emailed to the client.</div>` : emailed ? html`<div class="alert alert--warn">${emailed}</div>` : ""}
+      ${emailed === "sent" ? html`<div class="alert alert--success">Emailed to the client.</div>` : emailed === "texted" ? html`<div class="alert alert--success">Texted to the client.</div>` : emailed ? html`<div class="alert alert--warn">${emailed}</div>` : ""}
       <label>Link <input type="text" value="${url}" readonly data-select-all></label>
       <div class="row"><button class="btn btn--primary btn--sm" type="button" data-copy="${url}">Copy link</button>
+        ${sms.smsConfig().enabled ? html`<form class="inline-form" method="post" action="/ehr/appointments/${a.id}/checkin-link">${csrfField(req)}<input type="hidden" name="send" value="text"><button class="btn btn--sm" type="submit">Text new link to client</button></form>` : ""}
         <a class="btn btn--sm" href="sms:?&body=${encodeURIComponent(`Check in for your appointment: ${url}`)}">Text it (from this phone)</a>
         ${a.email ? html`<form class="inline-form" method="post" action="/ehr/appointments/${a.id}/checkin-link">${csrfField(req)}<input type="hidden" name="send" value="email"><button class="btn btn--sm" type="submit">Email new link</button></form>` : ""}</div>
       <p class="hint">Making a new link turns off the previous one. Clients can also check in at <strong>${publicBase(req)}/checkin</strong> with their last name and date of birth.</p>
@@ -452,13 +507,85 @@ function dashboardCard(db, user) {
     </section>`;
 }
 
+/* ---------------- Kiosk setup (staff) ---------------- */
+router.get("/kiosk", requirePerm("schedule:write"), (req, res) => {
+  const list = req.db.prepare("SELECT k.*, u.name AS by_name FROM checkin_kiosks k LEFT JOIN users u ON u.id = k.created_by ORDER BY k.revoked_at IS NOT NULL, k.created_at DESC").all();
+  res.send(page(req, { title: "Check-in kiosk", active: "schedule", body: html`
+    <div class="page-head"><div><h1>Front-desk check-in kiosk</h1><p>Turn an iPad (or any tablet) into a check-in station clients use in the lobby.</p></div>
+      <a class="btn btn--sm" href="/ehr/checkins">Check-ins</a></div>
+    <div class="grid grid--2">
+      <section class="card stack">
+        <h2>Set up this device</h2>
+        <ol class="list">
+          <li>Open this page <strong>on the iPad</strong> and sign in.</li>
+          <li>Name it and tap <strong>Make this device a kiosk</strong>. You'll be signed out and the iPad shows the check-in screen.</li>
+          <li>Lock it to that screen with iPad <strong>Guided Access</strong> (Settings → Accessibility → Guided Access, then triple-click the top button).</li>
+        </ol>
+        <form method="post" action="/ehr/kiosk" class="stack">${csrfField(req)}
+          <label>Kiosk name <input name="name" maxlength="60" placeholder="Front desk iPad" required></label>
+          <button class="btn btn--primary" type="submit">Make this device a kiosk</button>
+        </form>
+        <p class="hint">Between clients the kiosk resets itself after ${KIOSK_IDLE_SECONDS} seconds without a touch, and right after each check-in, so the next person never sees the previous one's screen.</p>
+      </section>
+      <section class="card"><h2>Kiosks</h2>
+        ${list.length ? html`<ul class="list-plain">${list.map((k) => html`<li class="row"><strong>${k.name}</strong>
+          ${k.revoked_at ? html`<span class="badge badge--muted">Turned off</span>` : html`<span class="badge badge--good">Active</span>`}
+          <span class="muted small">set up ${fmtTimestamp(k.created_at)}${k.by_name ? ` by ${k.by_name}` : ""}${k.last_used_at ? ` · last used ${fmtTimestamp(k.last_used_at)}` : ""}</span>
+          ${k.revoked_at ? "" : html`<form class="inline-form" method="post" action="/ehr/kiosk/${k.id}/revoke" data-confirm="Turn off this kiosk? It will stop working until set up again.">${csrfField(req)}<button class="btn btn--sm btn--ghost" type="submit">Turn off</button></form>`}</li>`)}</ul>`
+          : html`<p class="muted">No kiosks yet.</p>`}
+      </section>
+    </div>` }));
+});
+
+router.post("/kiosk", requirePerm("schedule:write"), (req, res) => {
+  const name = String((req.body || {}).name || "").trim().slice(0, 60) || "Front desk";
+  const token = crypto.randomBytes(32).toString("base64url");
+  const id = Number(req.db.prepare("INSERT INTO checkin_kiosks (name, token_hash, created_by) VALUES (?, ?, ?)").run(name, sha(token), req.user.id).lastInsertRowid);
+  audit(req, "create", "checkin_kiosk", id, null, name);
+  // Sign staff out on this device: the kiosk is used by clients.
+  if (req.session) req.db.prepare("DELETE FROM sessions WHERE id = ?").run(req.session.id);
+  const sec = secureCookie(req) ? "; Secure" : "";
+  res.append("Set-Cookie", `ehr_sid=; Path=/; HttpOnly; SameSite=Strict${sec}; Max-Age=0`);
+  res.append("Set-Cookie", `${KIOSK_COOKIE}=${token}; Path=/checkin; HttpOnly; SameSite=Lax${sec}; Max-Age=${400 * 86400}`);
+  res.redirect(303, "/checkin/kiosk");
+});
+
+router.post("/kiosk/:id/revoke", requirePerm("schedule:write"), (req, res) => {
+  req.db.prepare("UPDATE checkin_kiosks SET revoked_at = datetime('now') WHERE id = ? AND revoked_at IS NULL").run(Number(req.params.id));
+  audit(req, "update", "checkin_kiosk", Number(req.params.id), null, "turned off");
+  req.flash("success", "Kiosk turned off.");
+  res.redirect("/ehr/kiosk");
+});
+
+/** Admin summary of how clients get their link. */
+function autoLinkCard(req) {
+  const rc = require("../checkin-reminders").reminderConfig();
+  const mc = mailer.mailConfig(), sc = sms.smsConfig();
+  const kiosks = req.db.prepare("SELECT COUNT(*) AS n FROM checkin_kiosks WHERE revoked_at IS NULL").get().n;
+  const on = rc.on && rc.base && (mc.enabled || sc.enabled);
+  return html`<section class="card ci-ways">
+    <div class="card__head"><h2>How clients get their check-in</h2>${can(req.user, "schedule:write") ? html`<a class="btn btn--sm" href="/ehr/kiosk">Set up a kiosk</a>` : ""}</div>
+    <div class="ci-ways__grid">
+      <div><strong>Automatic link</strong><span class="badge badge--${on ? "good" : "muted"}">${on ? `On · ${rc.lead} min before` : "Off"}</span>
+        <p class="small muted">${on ? `Sent by ${[mc.enabled && "email", sc.enabled && "text"].filter(Boolean).join(" or ")} using each client's preferred contact.` : !rc.base ? "Needs EHR_PUBLIC_URL (your site address)." : rc.on ? "Set up email (Resend) or texting (Twilio) to turn this on." : "Turned off (EHR_CHECKIN_AUTO=0)."}</p></div>
+      <div><strong>Email</strong><span class="badge badge--${mc.enabled ? "good" : "muted"}">${mc.enabled ? "Ready" : "Not set up"}</span></div>
+      <div><strong>Text</strong><span class="badge badge--${sc.enabled ? "good" : "muted"}">${sc.enabled ? "Ready" : "Not set up"}</span>
+        ${sc.enabled ? "" : html`<p class="small muted">Add TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN and TWILIO_FROM in Render.</p>`}</div>
+      <div><strong>Front-desk kiosk</strong><span class="badge badge--${kiosks ? "good" : "muted"}">${kiosks ? `${kiosks} active` : "None"}</span></div>
+      <div><strong>Lobby page</strong><span class="badge badge--good">Always on</span><p class="small muted">${publicBase(req)}/checkin</p></div>
+    </div>
+  </section>`;
+}
+
 /** Check-in state of one appointment, for the roster. */
 function rosterStatus(r) {
   if (r.status === "cancelled" || r.status === "late_cancel") return { key: "cancelled", label: "Cancelled", tone: "muted" };
   if (r.status === "no_show") return { key: "no_show", label: "No-show", tone: "bad" };
   if (r.completed_at || r.status === "checked_in" || r.status === "completed") return { key: "in", label: r.completed_at ? "Checked in" : "Checked in by staff", tone: "good" };
   if (r.started_at) return { key: "progress", label: "Checking in…", tone: "warn" };
-  if (r.checkin_id) return { key: "link", label: "Link sent", tone: "info" };
+  if (r.link_sent_via && r.link_sent_via.startsWith("failed")) return { key: "link", label: `Couldn't ${r.link_sent_via.endsWith("text") ? "text" : "email"} link`, tone: "bad" };
+  if (r.link_sent_via) return { key: "link", label: `Link ${r.link_sent_via === "text" ? "texted" : "emailed"}`, tone: "info" };
+  if (r.checkin_id) return { key: "link", label: "Link made", tone: "info" };
   return { key: "waiting", label: "Not here yet", tone: "muted" };
 }
 
@@ -467,7 +594,7 @@ router.get("/checkins", requirePerm("schedule:read"), (req, res) => {
   const mine = req.user.role === "clinician" && req.query.all !== "1";
   const rows = req.db.prepare(`SELECT a.id AS appt_id, a.start_at, a.end_at, a.type, a.modality, a.status, a.clinician_id, u.name AS clinician_name,
       p.id AS patient_id, p.first_name, p.last_name, p.preferred_name,
-      c.id AS checkin_id, c.started_at, c.completed_at, c.flagged, c.contact_changes, c.contact_applied, c.insurance_changed, c.reviewed_at, c.quick,
+      c.id AS checkin_id, c.started_at, c.completed_at, c.link_sent_via, c.flagged, c.contact_changes, c.contact_applied, c.insurance_changed, c.reviewed_at, c.quick,
       (SELECT total_score FROM assessments WHERE id = c.phq9_id) AS phq9_total, (SELECT total_score FROM assessments WHERE id = c.gad7_id) AS gad7_total
     FROM appointments a JOIN patients p ON p.id = a.patient_id JOIN users u ON u.id = a.clinician_id LEFT JOIN checkins c ON c.appointment_id = a.id
     WHERE substr(a.start_at,1,10) = ? ${mine ? "AND a.clinician_id = ?" : ""}
@@ -500,6 +627,7 @@ router.get("/checkins", requirePerm("schedule:read"), (req, res) => {
   res.send(page(req, { title: "Check-ins", active: "schedule", body: html`
     <div class="page-head"><div><h1>Check-ins</h1><p>${fmtDate(day)}${mine ? " · your sessions" : ""} · clients check in at <strong>${publicBase(req)}/checkin</strong></p></div>
       <div class="row">${req.user.role === "clinician" ? html`<a class="btn btn--sm" href="/ehr/checkins?date=${day}${mine ? "&all=1" : ""}">${mine ? "Show everyone" : "Only mine"}</a>` : ""}<a class="btn btn--sm" href="/ehr/schedule">Schedule</a></div></div>
+    ${autoLinkCard(req)}
     ${groups.size ? html`<h2 class="section-title">Group sessions</h2>
       <div class="roster-grid">${[...groups.values()].map((g) => { const n = counted(g.members); return html`
         <section class="card roster">

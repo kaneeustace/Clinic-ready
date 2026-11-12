@@ -540,9 +540,22 @@ CREATE TABLE IF NOT EXISTS checkins (
   gad7_id INTEGER REFERENCES assessments(id) ON DELETE SET NULL,
   flagged INTEGER NOT NULL DEFAULT 0,
   quick INTEGER NOT NULL DEFAULT 0,
+  link_sent_at TEXT,
+  link_sent_via TEXT,
   reviewed_by INTEGER REFERENCES users(id),
   reviewed_at TEXT,
   created_by INTEGER REFERENCES users(id),
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_checkins_patient ON checkins(patient_id, created_at);
+
+-- Front-desk check-in kiosks (e.g. an iPad in the lobby). The device keeps a long-lived cookie; only its hash is stored.
+CREATE TABLE IF NOT EXISTS checkin_kiosks (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  last_used_at TEXT,
+  revoked_at TEXT
+);

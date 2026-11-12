@@ -684,3 +684,11 @@ fieldset { background: linear-gradient(180deg, #f9fbfe, #f5f8fc); border-color: 
 .roster__clin { margin-left: auto; }
 .roster__row--waiting .roster__name a { color: var(--muted); }
 .roster__row--cancelled { opacity: .55; }
+.ci__restart { margin-left: auto; }
+.ci--kiosk { max-width: 640px; }
+.ci--kiosk .ci__card h1 { font-size: 1.7rem; }
+.ci--kiosk .ci__btn { min-height: 58px; font-size: 1.1rem; }
+.ci-ways__grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
+.ci-ways__grid > div { display: grid; gap: .3rem; align-content: start; }
+.ci-ways__grid .badge { justify-self: start; }
+.ci-ways__grid p { margin: 0; }
