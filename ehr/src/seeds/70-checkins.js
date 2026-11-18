@@ -6,6 +6,7 @@ module.exports = function seedCheckins(db, ctx) {
   if (process.env.EHR_DEMO !== "1") return;
   const P = ctx.patients, U = ctx.users, d = today();
   if (P.length < 6) return;
+  db.prepare("UPDATE patients SET ahcccs_id = 'A12345678' WHERE id = ?").run(P[0]); // shows the AHCCCS documentation set
   const ins = db.prepare(`INSERT INTO appointments (patient_id, clinician_id, start_at, end_at, type, modality, status, created_by)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
   const appt = (pid, clin, start, end, type, status, modality = "in_person") =>

@@ -8,6 +8,7 @@ const PRODUCT = Object.freeze({
   tagline: "Behavioral health EHR",
 });
 const salesEmail = () => String(process.env.EHR_SALES_EMAIL || "").trim();
-const demoUrl = () => String(process.env.EHR_DEMO_URL || "https://clinic-ready-demo.onrender.com/ehr/login").trim();
+/** Public demo sign-in page; empty until EHR_DEMO_URL is set (the sales page then hides "Try the live demo"). */
+const demoUrl = () => String(process.env.EHR_DEMO_URL || "").trim();
 
 module.exports = { PRODUCT, salesEmail, demoUrl };

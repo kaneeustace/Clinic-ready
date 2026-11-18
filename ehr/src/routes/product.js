@@ -40,7 +40,7 @@ const FEATURES = [
 const FAQ = [
   ["Does it submit claims?", "Not directly yet. ChartReady checks codes, units and modifiers and produces superbills; your billing service or clearinghouse submits the claims."],
   ["Does it do e-prescribing?", "No. Medications are tracked on the chart; prescribing happens in your e-prescribing tool."],
-  ["Is it HIPAA compliant?", "ChartReady is built with HIPAA safeguards: role-based access, two-step sign-in, automatic sign-out, a tamper-evident audit log, encrypted backups and data export. We sign a Business Associate Agreement with every clinic, and host on infrastructure covered by a BAA."],
+  ["Is it HIPAA compliant?", "ChartReady is built with HIPAA safeguards: role-based access, two-factor sign-in, automatic sign-out, a tamper-evident audit log, encrypted backups and data export. We sign a Business Associate Agreement with every clinic, and host on infrastructure covered by a BAA."],
   ["Can my staff use it on their phones?", "Yes. It installs to the home screen like an app on iPhone and Android, and nothing is stored on the phone."],
   ["Can we bring our data from another EHR?", "Yes. We help you import clients and key records during onboarding."],
   ["Is there a contract?", "Month to month. Your data is yours, and you can export it at any time."],
@@ -64,8 +64,8 @@ function productPage(req, res, { sent = false, error = null, values = {} } = {},
       <p class="eyebrow">${PRODUCT.tagline} for outpatient &amp; IOP clinics</p>
       <h1>The EHR that keeps your notes audit-ready.</h1>
       <p class="lede">Notes, treatment plans, check-in, level of care and billing in one place, with AI that checks every note for insurance compliance before you bill. Built for Arizona clinics, AHCCCS included.</p>
-      <div class="hero__ctas"><a class="btn btn--primary btn--lg" href="#demo">Book a demo</a><a class="btn btn--ghost btn--lg" href="${demo}" target="_blank" rel="noopener">Try the live demo</a></div>
-      <p class="small muted">Live demo uses fictional clients. Password for every demo account: <code>Demo-Password-2026!</code> · try <code>therapist@example.com</code></p>
+      <div class="hero__ctas"><a class="btn btn--primary btn--lg" href="#demo">Book a demo</a>${demo ? html`<a class="btn btn--ghost btn--lg" href="${demo}" target="_blank" rel="noopener">Try the live demo</a>` : ""}</div>
+      ${demo ? html`<p class="small muted">Live demo uses fictional clients. Password for every demo account: <code>Demo-Password-2026!</code> · try <code>therapist@example.com</code></p>` : ""}
     </div>
     <div class="hero__art">${shot("dashboard", "ChartReady dashboard with the workboard and signature countdowns", "shot--desk")}${shot("checkin-phone", "Client checking in on a phone", "shot--phone")}</div>
   </div></section>
@@ -122,7 +122,7 @@ function productPage(req, res, { sent = false, error = null, values = {} } = {},
     <p class="eyebrow">Security &amp; HIPAA</p><h2>Built for protected health information</h2>
     <div class="features features--sec">
       <article class="feature"><h3>Access control</h3><p>Roles for clinicians, front desk, billing and admins. Psychotherapy notes stay with their author.</p></article>
-      <article class="feature"><h3>Two-step sign-in</h3><p>Authenticator-app codes, automatic sign-out and account lockout.</p></article>
+      <article class="feature"><h3>Two-factor sign-in</h3><p>Authenticator-app codes, automatic sign-out and account lockout.</p></article>
       <article class="feature"><h3>Tamper-evident audit log</h3><p>Every view and change is recorded in a hash-chained log with security alerts.</p></article>
       <article class="feature"><h3>Encrypted backups</h3><p>Automatic encrypted backups, restore drills and a full data export.</p></article>
       <article class="feature"><h3>Right of access</h3><p>Client record copies and an accounting of disclosures, built in.</p></article>
@@ -137,7 +137,7 @@ function productPage(req, res, { sent = false, error = null, values = {} } = {},
 
   <section id="demo" class="section"><div class="wrap demo">
     <div><p class="eyebrow">See it with your own workflows</p><h2>Book a 20-minute demo</h2>
-      <p>We'll walk through a day at your clinic: check-in, a progress note with the compliance check, a treatment plan, and billing. Or open the <a href="${demo}" target="_blank" rel="noopener">live demo</a> yourself.</p></div>
+      <p>We'll walk through a day at your clinic: check-in, a progress note with the compliance check, a treatment plan, and billing.${demo ? html` Or open the <a href="${demo}" target="_blank" rel="noopener">live demo</a> yourself.` : ""}</p></div>
     <form class="card demo__form" method="post" action="/software/demo#demo">
       ${sent ? html`<div class="alert alert--success" role="status">Thanks! We'll be in touch within one business day to set up your demo.</div>` : ""}
       ${error ? html`<div class="alert alert--error" role="alert">${error}</div>` : ""}
@@ -158,7 +158,7 @@ function productPage(req, res, { sent = false, error = null, values = {} } = {},
 </main>
 <footer class="foot"><div class="wrap foot__in">
   <span><b>${PRODUCT.name}</b> · ${PRODUCT.tagline}</span>
-  <span><a href="/ehr/login">Sign in</a> · <a href="${demo}" target="_blank" rel="noopener">Live demo</a>${salesEmail() ? html` · <a href="mailto:${salesEmail()}">${salesEmail()}</a>` : ""}</span>
+  <span><a href="/ehr/login">Sign in</a>${demo ? html` · <a href="${demo}" target="_blank" rel="noopener">Live demo</a>` : ""}${salesEmail() ? html` · <a href="mailto:${salesEmail()}">${salesEmail()}</a>` : ""}</span>
   <span class="muted small">© ${new Date().getFullYear()} ${PRODUCT.name}. ChartReady is software for clinics and does not provide medical care. In crisis? Call or text 988.</span>
 </div></footer>`;
   res.status(status).set("Cache-Control", "no-cache").send(`<!doctype html>
