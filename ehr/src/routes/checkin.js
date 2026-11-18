@@ -557,6 +557,24 @@ router.post("/kiosk/:id/revoke", requirePerm("schedule:write"), (req, res) => {
   res.redirect("/ehr/kiosk");
 });
 
+/** Printable lobby poster: a QR code that opens the check-in page. */
+router.get("/checkins/poster", requirePerm("schedule:read"), (req, res) => {
+  const url = `${publicBase(req)}/checkin`;
+  const clinic = getClinic(req.db);
+  const qr = require("../totp").qrSvg(url, { scale: 10, title: `QR code for ${url}` });
+  res.send(page(req, { title: "Check-in poster", bare: true, body: html`
+    <div class="print-toolbar no-print"><a class="btn btn--ghost btn--sm" href="/ehr/checkins">← Back</a>
+      <button class="btn btn--primary btn--sm" type="button" data-print>Print poster</button></div>
+    <article class="poster">
+      <div class="poster__brand">${require("../views").brandMark(clinic, "brand-logo--lg")}<span>${clinic.name}</span></div>
+      <h1>Check in with your phone</h1>
+      <p class="poster__lede">Point your camera at the code and tap the link.</p>
+      <div class="poster__qr">${raw(qr)}</div>
+      <p class="poster__url">or go to <strong>${url}</strong></p>
+      <p class="poster__foot">You'll need your last name and date of birth. Prefer paper? Please see the front desk.</p>
+    </article>` }));
+});
+
 /** Admin summary of how clients get their link. */
 function autoLinkCard(req) {
   const rc = require("../checkin-reminders").reminderConfig();
@@ -564,7 +582,7 @@ function autoLinkCard(req) {
   const kiosks = req.db.prepare("SELECT COUNT(*) AS n FROM checkin_kiosks WHERE revoked_at IS NULL").get().n;
   const on = rc.on && rc.base && (mc.enabled || sc.enabled);
   return html`<section class="card ci-ways">
-    <div class="card__head"><h2>How clients get their check-in</h2>${can(req.user, "schedule:write") ? html`<a class="btn btn--sm" href="/ehr/kiosk">Set up a kiosk</a>` : ""}</div>
+    <div class="card__head"><h2>How clients get their check-in</h2><div class="row"><a class="btn btn--sm" href="/ehr/checkins/poster">Print lobby QR poster</a>${can(req.user, "schedule:write") ? html`<a class="btn btn--sm" href="/ehr/kiosk">Set up a kiosk</a>` : ""}</div></div>
     <div class="ci-ways__grid">
       <div><strong>Automatic link</strong><span class="badge badge--${on ? "good" : "muted"}">${on ? `On · ${rc.lead} min before` : "Off"}</span>
         <p class="small muted">${on ? `Sent by ${[mc.enabled && "email", sc.enabled && "text"].filter(Boolean).join(" or ")} using each client's preferred contact.` : !rc.base ? "Needs EHR_PUBLIC_URL (your site address)." : rc.on ? "Set up email (Resend) or texting (Twilio) to turn this on." : "Turned off (EHR_CHECKIN_AUTO=0)."}</p></div>
@@ -706,4 +724,4 @@ router.post("/checkins/:id/reviewed", requirePerm("schedule:read"), (req, res) =
   res.redirect(`/ehr/checkins/${c.id}`);
 });
 
-module.exports = { router, publicRouter, dashboardCard, todaysCheckins, newToken, sha, resetRateLimit: () => attempts.clear() };
+module.exports = { router, clientRouter: publicRouter, dashboardCard, todaysCheckins, newToken, sha, resetRateLimit: () => attempts.clear() };

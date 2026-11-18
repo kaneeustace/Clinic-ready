@@ -61,7 +61,7 @@ function summarize(db, user, now = Date.now()) {
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 const escHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-function composeEmail(user, s, cfg = digestConfig(), clinicName = "Clinic Ready") {
+function composeEmail(user, s, cfg = digestConfig(), clinicName = "ChartReady") {
   const first = String(user.name || "").split(" ")[0] || "there";
   const link = cfg.url ? `${cfg.url}/ehr` : "";
   const lines = [];

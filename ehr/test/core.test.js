@@ -9,7 +9,8 @@ after(async () => { await t.stop(); });
 
 test("public site pages are served, source files are not", async () => {
   const c = t.client();
-  assert.equal((await c.get("/")).status, 200);
+  assert.equal((await c.get("/")).status, 302); // sales page by default (EHR_SITE_MODE)
+  assert.equal((await c.get("/index.html")).status, 200);
   assert.equal((await c.get("/services.html")).status, 200);
   assert.equal((await c.get("/assets/css/styles.css")).status, 200);
   for (const p of ["/ehr/src/db.js", "/ehr/package.json", "/.git/config", "/README.md", "/ehr/data/ehr.sqlite"]) {

@@ -31,6 +31,14 @@ services:
         value: America/Phoenix
       - key: EHR_CLINIC_NAME
         sync: false
+      # Sales site: "/" shows the ChartReady product page (product), the sample clinic site (clinic) or the EHR (ehr).
+      - key: EHR_SITE_MODE
+        value: product
+      # Where "Book a demo" requests are emailed (needs email set up) and where "Try the live demo" points.
+      - key: EHR_SALES_EMAIL
+        sync: false
+      - key: EHR_DEMO_URL
+        value: https://clinic-ready-demo.onrender.com/ehr/login
       # Operator: token for /ops/status, and the list of customer clinics shown under Administration → Customers.
       - key: EHR_OPS_TOKEN
         generateValue: true

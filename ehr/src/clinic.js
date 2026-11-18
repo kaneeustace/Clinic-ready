@@ -2,7 +2,7 @@
 /*
  * Clinic (practice) identity and branding: name, logo, address, NPI, tax ID and brand color.
  * One row in clinic_settings. Used by the app shell, login, printouts, superbills, emails and the
- * home-screen app name. Defaults come from EHR_CLINIC_NAME, then "Clinic Ready".
+ * home-screen app name. Defaults come from EHR_CLINIC_NAME, then the product name (ChartReady).
  */
 const COLORS = {
   blue: { label: "Blue", primary: "#315de7", dark: "#2448c2", light: "#eaf0fe", ring: "rgba(49,93,231,.18)" },
@@ -14,7 +14,7 @@ const COLORS = {
 };
 const FIELDS = ["name", "tagline", "address1", "address2", "city", "state", "zip", "phone", "fax", "email", "website", "npi", "tax_id", "taxonomy", "color"];
 
-function defaultName() { return String(process.env.EHR_CLINIC_NAME || "").trim().slice(0, 120) || "Clinic Ready"; }
+function defaultName() { return String(process.env.EHR_CLINIC_NAME || "").trim().slice(0, 120) || require("./product").PRODUCT.name; }
 
 /** Ensure the settings row exists (seeded from EHR_CLINIC_NAME). */
 function ensureClinic(db) {

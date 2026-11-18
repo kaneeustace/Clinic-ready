@@ -692,3 +692,28 @@ fieldset { background: linear-gradient(180deg, #f9fbfe, #f5f8fc); border-color: 
 .ci-ways__grid > div { display: grid; gap: .3rem; align-content: start; }
 .ci-ways__grid .badge { justify-self: start; }
 .ci-ways__grid p { margin: 0; }
+.powered { margin: 1rem 0 0; font-size: .75rem; color: var(--faint); text-align: center; letter-spacing: .02em; }
+
+/* ---------- Onboarding checklist ---------- */
+.onboard { border-color: #c9d8fb; background: linear-gradient(180deg, var(--primary-light), #fff 120px); }
+.onboard__bar { height: 6px; border-radius: 6px; background: var(--surface-3); overflow: hidden; margin: -.25rem 0 1rem; }
+.onboard__bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--primary), var(--teal)); border-radius: 6px; }
+.onboard__list { list-style: none; margin: 0; padding: 0; display: grid; gap: .1rem; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); column-gap: 1.5rem; }
+.onboard__list li { display: grid; grid-template-columns: 26px 1fr; gap: .6rem; padding: .55rem 0; align-items: start; }
+.onboard__list a { font-weight: 650; text-decoration: none; }
+.onboard__list p { margin: .1rem 0 0; }
+.onboard__tick { width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--border-strong); display: grid; place-items: center; font-size: .75rem; font-weight: 800; color: #fff; margin-top: .05rem; }
+.onboard__list li.is-done .onboard__tick { background: var(--good); border-color: var(--good); }
+.onboard__list li.is-done a { color: var(--muted); text-decoration: line-through; }
+
+/* ---------- Lobby check-in poster (prints on letter paper) ---------- */
+.poster { max-width: 720px; margin: 1.5rem auto; background: #fff; border-radius: 24px; padding: 3rem 2.5rem; text-align: center; box-shadow: var(--shadow-lg); }
+.poster__brand { display: flex; align-items: center; justify-content: center; gap: .8rem; font-weight: 800; font-size: 1.4rem; margin-bottom: 1.5rem; }
+.poster h1 { font-size: 2.6rem; margin: 0 0 .5rem; }
+.poster__lede { font-size: 1.25rem; color: var(--muted); }
+.poster__qr { margin: 1.75rem auto; width: min(100%, 420px); }
+.poster__qr svg { width: 100%; height: auto; display: block; }
+.poster__url { font-size: 1.1rem; word-break: break-all; }
+.poster__foot { margin-top: 1.5rem; color: var(--muted); }
+.print-toolbar { display: flex; justify-content: space-between; max-width: 720px; margin: 1rem auto 0; padding: 0 1rem; }
+@media print { .poster { box-shadow: none; margin: 0 auto; padding: 1rem; } @page { margin: .6in; } }

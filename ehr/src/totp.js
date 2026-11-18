@@ -11,7 +11,7 @@
  */
 const crypto = require("node:crypto");
 
-const ISSUER = "Clinic Ready EHR";
+const ISSUER = "ChartReady";
 const PERIOD = 30;
 const DIGITS = 6;
 const B32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";

@@ -3,7 +3,7 @@
  * Outbound email with no extra dependencies.
  *
  *   EHR_MAIL_PROVIDER = smtp | resend        (unset = email disabled)
- *   EHR_MAIL_FROM     = "Clinic Ready <notes@yourclinic.com>"   (for Gmail SMTP: the Gmail address itself)
+ *   EHR_MAIL_FROM     = "Your Clinic <notes@yourclinic.com>"   (for Gmail SMTP: the Gmail address itself)
  *
  *   smtp:   EHR_SMTP_HOST, EHR_SMTP_PORT (465 = TLS, 587 = STARTTLS; default 587), EHR_SMTP_USER, EHR_SMTP_PASS
  *           TLS is required: a server that doesn't offer STARTTLS is refused.

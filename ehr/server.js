@@ -84,6 +84,6 @@ function main() {
   require("./src/checkin-reminders").scheduleCheckinReminders(db);
 
   createApp(db).listen(PORT, () => {
-    console.log(`Clinic Ready running at http://localhost:${PORT}  (EHR: http://localhost:${PORT}/ehr)`);
+    console.log(`ChartReady running at http://localhost:${PORT}  (EHR: http://localhost:${PORT}/ehr)`);
   });
 }

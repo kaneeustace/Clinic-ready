@@ -48,7 +48,7 @@ test("base32 round trip, RFC 4648 vectors, secret format and otpauth URI", () =>
   assert.equal(totp.base32Decode(s).length, 20);
   assert.equal(totp.groupSecret("ABCDEFGHIJ"), "ABCD EFGH IJ");
   const uri = totp.otpauthUri(s, "a.b+c@example.com");
-  assert.equal(uri, `otpauth://totp/Clinic%20Ready%20EHR:a.b%2Bc%40example.com?secret=${s}&issuer=Clinic%20Ready%20EHR&algorithm=SHA1&digits=6&period=30`);
+  assert.equal(uri, `otpauth://totp/ChartReady:a.b%2Bc%40example.com?secret=${s}&issuer=ChartReady&algorithm=SHA1&digits=6&period=30`);
 });
 
 test("verify: ±1 step window and replay protection", () => {
@@ -111,7 +111,7 @@ test("enrollment on /ehr/account: QR + key, confirm with password and code, reco
   r = await c.get("/ehr/account/mfa/setup");
   assert.equal(r.status, 200);
   assert.match(r.text, /<svg [^>]*role="img"/);
-  assert.match(r.text, /otpauth:\/\/totp\/Clinic%20Ready%20EHR:therapist%40example\.com\?secret=/);
+  assert.match(r.text, /otpauth:\/\/totp\/ChartReady:therapist%40example\.com\?secret=/);
   const secret = r.text.match(/class="mfa-key"[^>]*>([A-Z2-7 ]+)</)[1].replace(/ /g, "");
   assert.equal(secret, mfa.secretOf(user("therapist")));
   assert.equal(user("therapist").mfa_enabled, 0);

@@ -1,6 +1,6 @@
 {
-  "name": "Clinic Ready EHR",
-  "short_name": "Clinic Ready",
+  "name": "ChartReady",
+  "short_name": "ChartReady",
   "description": "Behavioral health EHR",
   "id": "/ehr",
   "start_url": "/ehr",

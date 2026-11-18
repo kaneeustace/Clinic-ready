@@ -559,3 +559,19 @@ CREATE TABLE IF NOT EXISTS checkin_kiosks (
   last_used_at TEXT,
   revoked_at TEXT
 );
+
+-- Sales leads from the ChartReady website's "Book a demo" form (src/routes/product.js). Not patient data.
+CREATE TABLE IF NOT EXISTS sales_leads (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  email TEXT NOT NULL,
+  phone TEXT,
+  organization TEXT,
+  role TEXT,
+  clinicians TEXT,
+  state TEXT,
+  message TEXT,
+  status TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new','contacted','demo_scheduled','won','lost')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT
+);

@@ -103,7 +103,7 @@
     if (!ios || standalone || !spot) return;
     if (dismissed && !document.querySelector("[data-install-hint]")) return;
     var meta = document.querySelector('meta[name="apple-mobile-web-app-title"]');
-    var appName = (meta && meta.getAttribute("content")) || "Clinic Ready";
+    var appName = (meta && meta.getAttribute("content")) || "ChartReady";
     var iconLink = document.querySelector('link[rel="apple-touch-icon"]');
     var iconSrc = (iconLink && iconLink.getAttribute("href")) || "/ehr/static/icons/icon-180.png";
     var box = document.createElement("div");

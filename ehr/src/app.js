@@ -10,7 +10,7 @@ const EHR_PUBLIC = path.resolve(__dirname, "..", "public");
 
 // Feature modules. Each exports `router` (mounted at /ehr, behind login);
 // requests.js also exports `publicRouter` (mounted at /api, no login).
-const MODULES = ["dashboard", "patients", "schedule", "notes", "clinical", "plans", "billing", "requests", "records", "photos", "loc", "email", "scan", "clinic", "ops", "checkin", "security", "backups", "admin"];
+const MODULES = ["dashboard", "patients", "schedule", "notes", "clinical", "plans", "billing", "requests", "records", "photos", "loc", "email", "scan", "clinic", "ops", "checkin", "product", "security", "backups", "admin"];
 
 function securityHeaders(req, res, next) {
   res.set({
@@ -59,7 +59,14 @@ function createApp(db) {
   /* ---------- Public marketing site: only whitelisted files from the repo root ---------- */
   app.use("/assets", express.static(path.join(SITE_ROOT, "assets"), { maxAge: "1h", dotfiles: "deny" }));
   const sitePages = new Set(fs.readdirSync(SITE_ROOT).filter((f) => f.endsWith(".html")));
-  app.get("/", (req, res) => res.sendFile(path.join(SITE_ROOT, "index.html")));
+  // Site root: the ChartReady sales page (default), the sample clinic website, or straight to the EHR (customer clinics).
+  app.get("/", (req, res) => {
+    const mode = String(process.env.EHR_SITE_MODE || "product").toLowerCase();
+    if (mode === "ehr") return res.redirect("/ehr");
+    if (mode === "clinic") return res.sendFile(path.join(SITE_ROOT, "index.html"));
+    res.redirect("/software");
+  });
+  app.use("/software", require("./routes/product").siteRouter);
   app.get("/:page", (req, res, next) => {
     let name = req.params.page;
     if (!name.endsWith(".html")) name += ".html";
@@ -83,7 +90,7 @@ function createApp(db) {
   }
 
   /* ---------- Client self check-in (no staff login; see routes/checkin.js) ---------- */
-  app.use("/checkin", noStore, require("./routes/checkin").publicRouter);
+  app.use("/checkin", noStore, require("./routes/checkin").clientRouter);
 
   /* ---------- EHR ---------- */
   // Operator health check for multi-clinic hosting (token-protected; 404 unless EHR_OPS_TOKEN is set). No PHI.

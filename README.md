@@ -1,9 +1,16 @@
-# Clinic Ready: Behavioral Health Website + EHR
+# ChartReady: behavioral health EHR
 
-This repo has two parts:
+ChartReady is a hosted EHR for outpatient and IOP behavioral health clinics, sold as a monthly subscription.
+Each customer clinic gets its own copy (server, disk and database), branded with the clinic's name and logo.
 
-1. **A public website** for an outpatient behavioral health clinic. It's static HTML/CSS/JS in the repo root.
-2. **An EHR** (electronic health record) in `ehr/`. It's a Node.js + SQLite app that also serves the website and receives the website's appointment requests.
+This repo has three parts:
+
+1. **The EHR** in `ehr/`: a Node.js + SQLite app (no build step).
+2. **The ChartReady sales site** at `/software` (features, pricing, security, "Book a demo" form → Administration → Sales leads).
+   `EHR_SITE_MODE` picks what the site root shows: `product` (sales page, default), `clinic` (the sample clinic website below) or `ehr` (straight to sign-in, for customer clinics).
+3. **A sample clinic website** (static HTML/CSS/JS in the repo root) that a clinic can adapt; its contact form feeds the EHR's intake requests.
+
+**Selling it:** start with `ehr/docs/selling/` — the launch guide for each new clinic, and the sales kit in `ehr/docs/selling/kit/` (one-pager, security overview, demo script, onboarding guide, owner launch checklist and draft agreements for attorney review).
 
 > ⚠️ **Demo/prototype. Do not enter real patient information yet.** The EHR follows HIPAA-minded practices: role-based access, audit logging, session timeouts, CSRF protection, no-store caching and e-signatures. Software alone doesn't make an organization HIPAA compliant, though. See [Before using real PHI](#before-using-real-phi).
 
@@ -72,6 +79,7 @@ The crisis bar, header and footer are copied into every page. If you change one,
 - **Note scanner (PDF):** upload a PDF note (from another system, or scanned/handwritten) and pick the payer (commercial, Medicare, Medicaid, AHCCCS); the AI returns the same compliance findings as the in-EHR check. The PDF is sent to the AI and discarded, never stored. Needs AI review turned on.
 - **Selling to other clinics:** Administration → Clinic settings sets each clinic's name, logo, address, NPI, tax ID and brand color (used across the app, printouts, superbills and emails); the first-run setup asks for the clinic name; `/ops/status` (token-protected, counts only) and Administration → Customers let you watch every clinic you host. See `ehr/docs/selling/launch-a-clinic.md` and `deploy/new-clinic.render.yaml`.
 - **Client check-in on their phone:** clients check in at `/checkin` (last name + date of birth for today's appointment) or from a link staff send from the appointment page. Steps: confirm or update contact details (held for staff review), new insurance with card photos, PHQ-9/GAD-7 when not done in 14 days (a positive self-harm item shows crisis resources and alerts staff), and a typed consent signature. The appointment is marked checked in; staff see it on the dashboard and under Schedule → Check-ins. Returning clients (checked in within 30 days, `EHR_CHECKIN_REPEAT_DAYS`) get a one-tap "Welcome back" check-in; the Check-ins page shows a roster card per group session ("3 of 5 here"). Links go out automatically before each appointment (`EHR_CHECKIN_LEAD_MINUTES`, default 60) by email or by text through Twilio (`TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM`), using the client's preferred contact method. A front-desk iPad becomes a kiosk under Check-ins → Set up a kiosk; it resets itself between clients.
+- **Lobby QR poster and onboarding:** Check-ins → Print lobby QR poster (QR code to the check-in page, generated in-house). New clinics see a self-updating "Get your clinic ready" checklist on the admin dashboard.
 - **Measurement-based care:**
   - PHQ-9 and GAD-7 with exact scoring and severity bands.
   - Trend charts with response/remission indicators.

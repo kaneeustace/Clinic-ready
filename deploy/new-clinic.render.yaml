@@ -28,6 +28,11 @@ services:
         value: America/Phoenix
       - key: EHR_CLINIC_NAME
         sync: false
+      # Customer clinics: the site address goes straight to the EHR sign-in.
+      - key: EHR_SITE_MODE
+        value: ehr
+      - key: EHR_PUBLIC_URL
+        sync: false
       - key: EHR_ADMIN_EMAIL
         sync: false
       - key: EHR_ADMIN_PASSWORD

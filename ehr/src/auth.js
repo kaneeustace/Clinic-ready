@@ -204,6 +204,7 @@ function loginPage(req, { error, email = "" } = {}) {
             therapist@example.com · prescriber@example.com · frontdesk@example.com · billing@example.com · admin@example.com
           </div>` : ""}
           <p class="muted small">Forgot your password? Ask an administrator to reset it under Admin → Users. The clinic's owner can also reset an admin account from the server (<code>npm run reset-admin</code>).</p>
+          <p class="powered">Powered by <strong>${require("./product").PRODUCT.name}</strong></p>
           <p class="muted small">Authorized personnel only. All access to patient records is logged.</p>
         </div>
       </div>`,
