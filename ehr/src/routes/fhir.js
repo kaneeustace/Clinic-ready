@@ -56,7 +56,11 @@ const SYS = {
 /* Helpers                                                             */
 /* ------------------------------------------------------------------ */
 
-const baseUrl = (req) => `${String(process.env.EHR_PUBLIC_URL || `${req.protocol}://${req.get("host")}`).replace(/\/+$/, "")}/fhir`;
+/** Public base URL. Behind a proxy (Render) the request arrives as http, so use the forwarded protocol. */
+function baseUrl(req) {
+  const proto = String(req.get("x-forwarded-proto") || req.protocol).split(",")[0].trim() === "https" ? "https" : req.protocol;
+  return `${String(process.env.EHR_PUBLIC_URL || `${proto}://${req.get("host")}`).replace(/\/+$/, "")}/fhir`;
+}
 /** SQLite datetime('now') (UTC, "YYYY-MM-DD HH:MM:SS") -> FHIR instant. */
 const instant = (s) => (s ? `${String(s).replace(" ", "T").slice(0, 19)}Z` : undefined);
 /** Offset of the clinic time zone at a given moment, in minutes. */
