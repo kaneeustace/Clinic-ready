@@ -67,6 +67,7 @@ function seed(db, { password = DEMO_PASSWORD } = {}) {
     for (const u of USERS) {
       ctx.users[u.key] = Number(insUser.run(u.email, u.name, u.role, u.credentials, u.npi || null, hash).lastInsertRowid);
     }
+    for (const id of Object.values(ctx.users)) require("./routes/rx").autoEnablePrescriber(db, id); // e.g. the PMHNP
     const insFee = db.prepare("INSERT OR REPLACE INTO fee_schedule (cpt_code, description, fee_cents) VALUES (?, ?, ?)");
     FEES.forEach((f) => insFee.run(...f));
 

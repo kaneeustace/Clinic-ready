@@ -54,6 +54,23 @@ const str = (v, n = 500) => String(v ?? "").trim().slice(0, n);
 const fmtQty = (n) => String(Math.round(n * 100) / 100);
 const ICD_RE = /^[A-TV-Z][0-9][0-9A-Z](\.[0-9A-Z]{1,4})?$/;
 
+/**
+ * Credentials that carry prescriptive authority: MD, DO, PA/PA-C, APRN, and nurse practitioners (PMHNP, FNP, AGNP,
+ * ANP, NP, CNP ...). A user with one of these can prescribe without an administrator switching it on.
+ */
+function prescribingCredential(credentials) {
+  return String(credentials || "").toUpperCase().split(/[\s,;/()]+/).filter(Boolean)
+    .some((t) => /^(MD|DO|PA|PA-C|APRN(-[A-Z]+)?|CNP|[A-Z]{0,5}NP(-[A-Z]{1,3})?)$/.test(t));
+}
+
+/** Turn prescribing on for a clinician/admin whose credentials allow it. Returns true if it changed. */
+function autoEnablePrescriber(db, userId) {
+  const u = db.prepare("SELECT role, credentials, can_prescribe FROM users WHERE id = ?").get(userId);
+  if (!u || u.can_prescribe || !["admin", "clinician"].includes(u.role) || !prescribingCredential(u.credentials)) return false;
+  db.prepare("UPDATE users SET can_prescribe = 1 WHERE id = ?").run(userId);
+  return true;
+}
+
 /** DEA registration number: 2 letters + 7 digits, last digit is a checksum. */
 function deaValid(dea) {
   const m = /^([ABCDEFGHJKLMPRSTUX])([A-Z9])(\d{7})$/.exec(String(dea || "").toUpperCase());
@@ -442,6 +459,7 @@ function prescriberCard(req, user) {
       ${csrfField(req)}
       <h2>Prescribing</h2>
       <label class="check"><input type="checkbox" name="can_prescribe" value="1" ${u.can_prescribe ? raw("checked") : ""}> Can write prescriptions</label>
+      <p class="hint">Turned on automatically for prescribing credentials (PMHNP and other nurse practitioners, MD, DO, PA, APRN). Untick to stop someone prescribing.</p>
       <div class="form-grid">
         <label>DEA number <span class="hint">(for controlled substances)</span><input name="dea_number" value="${u.dea_number || ""}" maxlength="9" autocapitalize="characters" autocomplete="off"></label>
         <label>DEA expires<input type="date" name="dea_expires" value="${u.dea_expires || ""}"></label>
@@ -473,4 +491,4 @@ router.post("/admin/users/:id/prescriber", gate((u) => can(u, "admin")), (req, r
   res.redirect(`/ehr/admin/users/${user.id}/edit#prescribing`);
 });
 
-module.exports = { router, prescriberCard, deaValid, toWords, expiresOn, TEMPLATES, canWriteRx };
+module.exports = { router, prescriberCard, prescribingCredential, autoEnablePrescriber, deaValid, toWords, expiresOn, TEMPLATES, canWriteRx };

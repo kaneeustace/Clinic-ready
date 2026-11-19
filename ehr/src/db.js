@@ -108,7 +108,17 @@ function migrate(db, schema) {
   };
   for (const [table, cols] of Object.entries(ADD_COLUMNS)) {
     const have = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name));
-    for (const [name, def] of cols) if (!have.has(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${def}`);
+    for (const [name, def] of cols) {
+      if (have.has(name)) continue;
+      db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${def}`);
+      if (table === "users" && name === "can_prescribe") {
+        // First time prescribing exists: turn it on for staff whose credentials carry prescriptive authority.
+        const { prescribingCredential } = require("./routes/rx");
+        for (const u of db.prepare("SELECT id, credentials FROM users WHERE role IN ('admin', 'clinician')").all()) {
+          if (prescribingCredential(u.credentials)) db.prepare("UPDATE users SET can_prescribe = 1 WHERE id = ?").run(u.id);
+        }
+      }
+    }
   }
 
   migrateLegacyGoals(db);

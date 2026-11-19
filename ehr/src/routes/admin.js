@@ -321,6 +321,7 @@ router.post("/admin/users", adminOnly, (req, res) => {
     "INSERT INTO users (email, name, role, credentials, npi, education_level, supervisor_id, requires_cosign, password_hash, password_changed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))"
   ).run(v.email, v.name, v.role, v.credentials || null, v.npi || null, v.education_level || null, v.supervisor_id, v.requires_cosign, hashPassword(password)).lastInsertRowid);
   audit(req, "create", "user", id, null, `role=${v.role}`);
+  if (require("./rx").autoEnablePrescriber(req.db, id)) audit(req, "update", "user", id, null, "prescribing on (credentials)");
   req.flash("success", `User ${v.name} created.`);
   res.redirect("/ehr/admin/users");
 });
@@ -422,6 +423,7 @@ router.post("/admin/users/:id/edit", adminOnly, (req, res) => {
   if (user.active !== v.active) changes.push(v.active ? "activated" : "deactivated");
   if (user.name !== v.name || (user.credentials || "") !== v.credentials || (user.npi || "") !== v.npi || (user.education_level || "") !== v.education_level) changes.push("profile");
   audit(req, "update", "user", user.id, null, changes.join("; ") || "no changes");
+  if ((user.credentials || "") !== v.credentials && require("./rx").autoEnablePrescriber(req.db, user.id)) audit(req, "update", "user", user.id, null, "prescribing on (credentials)");
   if (user.active === 1 && v.active === 0) {
     const n = req.db.prepare("DELETE FROM sessions WHERE user_id = ?").run(user.id).changes;
     audit(req, "deactivate", "user", user.id, null, `sessions_revoked=${n}`);

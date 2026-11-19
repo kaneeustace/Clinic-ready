@@ -7,7 +7,7 @@ module.exports = function seedRx(db, ctx) {
   const U = ctx.users;
   const P = ctx.patients;
   if (!U.prescriber || P.length < 10) return;
-  db.prepare("UPDATE users SET can_prescribe = 1, dea_number = 'BP1234563', dea_expires = '2028-06-30', license_number = 'NP-00000', license_state = 'AZ' WHERE id = ?").run(U.prescriber);
+  db.prepare("UPDATE users SET dea_number = 'BP1234563', dea_expires = '2028-06-30', license_number = 'NP-00000', license_state = 'AZ' WHERE id = ?").run(U.prescriber);
   const med = Number(db.prepare(`INSERT INTO medications (patient_id, name, dose, route, frequency, prescriber, start_date, active, notes, created_by)
     VALUES (?, 'Testosterone cypionate', '200 mg/mL', 'Intramuscular', 'Inject 0.5 mL (100 mg) into the muscle once weekly.', 'Pat Prescriber, PMHNP-BC', ?, 1, 'Added from a prescription', ?)`)
     .run(P[9], today(), U.prescriber).lastInsertRowid);

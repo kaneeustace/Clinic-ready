@@ -26,7 +26,29 @@ test("DEA check digit and quantity in words", () => {
   assert.equal(rx.toWords(2.5), "two and 50/100");
 });
 
+test("prescribing credentials turn prescribing on automatically", async () => {
+  assert.equal(rx.prescribingCredential("PMHNP-BC"), true);
+  assert.equal(rx.prescribingCredential("MSN, PMHNP"), true);
+  for (const c of ["FNP-C", "NP", "MD", "DO", "PA-C", "APRN", "AGNP-C", "CNP"]) assert.equal(rx.prescribingCredential(c), true, c);
+  for (const c of ["LCSW", "LPC", "LISAC", "BHT", "RN", "", null, "PhD"]) assert.equal(rx.prescribingCredential(c), false, String(c));
+  // The seeded PMHNP can prescribe; the LCSW can't
+  assert.equal(t.db.prepare("SELECT can_prescribe FROM users WHERE id = ?").get(t.ctx.users.prescriber).can_prescribe, 1);
+  assert.equal(t.db.prepare("SELECT can_prescribe FROM users WHERE id = ?").get(t.ctx.users.therapist).can_prescribe, 0);
+  // A new PMHNP added by the admin can prescribe right away
+  const admin = await t.login("admin");
+  let r = await admin.post("/ehr/admin/users", { name: "Nia Nurse", email: "nia@example.com", role: "clinician", credentials: "PMHNP-BC", npi: "1234567893", password: "Another-Password-456!" });
+  assert.equal(r.status, 302, r.text.slice(0, 300));
+  const nia = t.db.prepare("SELECT id, can_prescribe FROM users WHERE email = 'nia@example.com'").get();
+  assert.equal(nia.can_prescribe, 1);
+  // Changing a counselor's credentials to FNP turns it on too
+  r = await admin.post(`/ehr/admin/users/${t.ctx.users.therapist2}/edit`, { name: "Casey Counselor", role: "clinician", credentials: "FNP-C", npi: "0000000002", active: "1" });
+  assert.equal(r.status, 302);
+  assert.equal(t.db.prepare("SELECT can_prescribe FROM users WHERE id = ?").get(t.ctx.users.therapist2).can_prescribe, 1);
+});
+
 test("only set-up prescribers can write; admin sets DEA (validated)", async () => {
+  const admin0 = await t.login("admin");
+  await admin0.post(`/ehr/admin/users/${t.ctx.users.prescriber}/prescriber`, {}); // switched off by the admin
   const c = await t.login("prescriber");
   let tab = await c.get(`/ehr/patients/${pid}/prescriptions`);
   assert.equal(tab.status, 200);
