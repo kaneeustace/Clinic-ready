@@ -147,6 +147,7 @@ router.get("/admin", adminOnly, (req, res) => {
             <li><a href="/ehr/admin/customers">Customers (all clinics you host)</a></li>
             <li><a href="/ehr/admin/leads">Sales leads (demo requests from the website)</a></li>
             <li><a href="/ehr/admin/email">End-of-day note emails</a></li>
+            <li><a href="/ehr/admin/api">API access (FHIR)</a></li>
           </ul>
           <p class="muted small">Patient access reports are available from the audit log by filtering on a patient MRN.</p>
         </section>

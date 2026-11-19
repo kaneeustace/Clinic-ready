@@ -32,6 +32,7 @@ const FEATURES = [
   ["Treatment plans that connect", "Problems, goals, objectives and interventions, linked to every progress note. Notes can't be written until there's an active plan."],
   ["AHCCCS built in", "AMPM 940 encounter fields, service-plan rules, education modifiers, place-of-service and telehealth checks for clients with an AHCCCS ID."],
   ["Workboard and co-signs", "To do, in progress, done. 24-hour signature and 48-hour supervisor co-sign countdowns, plus an end-of-day email of what's outstanding."],
+  ["FHIR API", "A standard FHIR R4 API so labs, partners and data warehouses can read records securely, with scoped access and a full audit trail."],
   ["Hormone therapy (TRT)", "Optional module for men's health: testosterone regimen, labs with hematocrit and PSA alerts, doses and injection sites, and a Schedule III stock record with witnessed waste."],
   ["Level of care and UR", "Admissions, step-downs, authorizations, days used, next review and a live census, the way IOP and residential programs work."],
   ["Client check-in on their phone", "Automatic texted or emailed links, a front-desk iPad kiosk, PHQ-9/GAD-7, insurance card photos and a signed consent. Group rosters show who's here."],

@@ -12,6 +12,11 @@ What ChartReady does today, by area. If something isn't on this list, assume it 
 - Chart tabs: Overview, Appointments, Notes, Treatment plan, Measures, Prescriptions, Billing, Level of care, Hormone therapy (when turned on), Pictures.
 - The chart banner shows the client's photo, current level of care and any safety flags.
 
+## FHIR API
+
+- Standard FHIR R4 read-only API for partners, labs, HIEs and data warehouses: patients, appointments, problems, allergies, medications, prescriptions, results (LOINC-coded) and insurance.
+- OAuth 2.0 client credentials; administrators create, scope and revoke API clients. Notes are never shared, Part 2 data only when allowed, every call audited.
+
 ## Prescriptions
 
 - Administrators choose who can prescribe and record each prescriber's DEA number (validated), expiry and state license.

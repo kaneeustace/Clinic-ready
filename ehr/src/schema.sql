@@ -726,3 +726,27 @@ CREATE TABLE IF NOT EXISTS prescriptions (
 );
 CREATE INDEX IF NOT EXISTS idx_prescriptions_patient ON prescriptions(patient_id, written_on);
 CREATE INDEX IF NOT EXISTS idx_prescriptions_prescriber ON prescriptions(prescriber_id, written_on);
+
+-- ---------------------------------------------------------------------------------------------------------------
+-- FHIR R4 API (routes/fhir.js). Read-only. Outside systems sign in as an API client (OAuth 2.0 client credentials).
+-- ---------------------------------------------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS fhir_clients (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  client_id TEXT NOT NULL UNIQUE,
+  secret_hash TEXT NOT NULL,
+  scopes TEXT NOT NULL DEFAULT 'system/*.read',
+  include_part2 INTEGER NOT NULL DEFAULT 0,
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  last_used_at TEXT,
+  revoked_at TEXT
+);
+-- Access tokens (stored as sha256; the token itself is shown only to the client). One hour each.
+CREATE TABLE IF NOT EXISTS fhir_tokens (
+  token_hash TEXT PRIMARY KEY,
+  client_ref INTEGER NOT NULL REFERENCES fhir_clients(id),
+  scopes TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);

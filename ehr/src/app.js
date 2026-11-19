@@ -10,7 +10,7 @@ const EHR_PUBLIC = path.resolve(__dirname, "..", "public");
 
 // Feature modules. Each exports `router` (mounted at /ehr, behind login);
 // requests.js also exports `publicRouter` (mounted at /api, no login).
-const MODULES = ["dashboard", "patients", "schedule", "notes", "clinical", "plans", "billing", "requests", "records", "photos", "loc", "trt", "rx", "email", "scan", "clinic", "ops", "checkin", "product", "security", "backups", "admin"];
+const MODULES = ["dashboard", "patients", "schedule", "notes", "clinical", "plans", "billing", "requests", "records", "photos", "loc", "trt", "rx", "fhir", "email", "scan", "clinic", "ops", "checkin", "product", "security", "backups", "admin"];
 
 function securityHeaders(req, res, next) {
   res.set({
@@ -107,6 +107,9 @@ function createApp(db) {
   for (const m of MODULES) app.use("/ehr", require(`./routes/${m}`).router);
   app.use("/ehr", (req, res) => notFound(req, res));
 
+  /* ---------- FHIR R4 API (read-only; OAuth client credentials; see routes/fhir.js) ---------- */
+  app.use("/fhir", require("./routes/fhir").fhirRouter);
+
   /* ---------- Site 404 ---------- */
   app.use((req, res) => res.status(404).sendFile(path.join(SITE_ROOT, "404.html")));
 
@@ -116,6 +119,7 @@ function createApp(db) {
     const status = err.status || err.statusCode || 500;
     if (status >= 500) console.error(err);
     if (req.path.startsWith("/api")) return res.status(status).json({ error: status >= 500 ? "server_error" : err.message });
+    if (req.path.startsWith("/fhir")) return res.status(status).type("application/fhir+json").send(JSON.stringify({ resourceType: "OperationOutcome", issue: [{ severity: "error", code: status >= 500 ? "exception" : "invalid", diagnostics: status >= 500 ? "Server error. It has been logged." : err.message }] }));
     res.status(status).send(page(req, {
       title: "Error",
       body: html`<div class="card"><h1>Something went wrong</h1><p>${status >= 500 ? "An unexpected error occurred. It has been logged." : err.message}</p><p><a href="/ehr">Back to dashboard</a></p></div>`,
