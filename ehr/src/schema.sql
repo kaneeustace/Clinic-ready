@@ -689,3 +689,40 @@ CREATE TABLE IF NOT EXISTS trt_settings (
   updated_by INTEGER REFERENCES users(id),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- ---------------------------------------------------------------------------------------------------------------
+-- Prescriptions (routes/rx.js). Written and signed by a prescriber (users.can_prescribe), printed for a wet signature,
+-- faxed, phoned in, or recorded after entry in an outside e-prescribing system. Never deleted: voided or discontinued.
+-- ---------------------------------------------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS prescriptions (
+  id INTEGER PRIMARY KEY,
+  patient_id INTEGER NOT NULL REFERENCES patients(id),
+  prescriber_id INTEGER NOT NULL REFERENCES users(id),
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'discontinued', 'voided')),
+  drug TEXT NOT NULL,
+  strength TEXT,
+  dosage_form TEXT,
+  route TEXT,
+  sig TEXT NOT NULL,
+  quantity REAL NOT NULL,
+  quantity_unit TEXT NOT NULL,
+  days_supply INTEGER,
+  refills INTEGER NOT NULL DEFAULT 0,
+  schedule TEXT NOT NULL DEFAULT '' CHECK (schedule IN ('', 'II', 'III', 'IV', 'V')),
+  daw INTEGER NOT NULL DEFAULT 0,
+  diagnosis TEXT,
+  pharmacy TEXT,
+  pharmacy_phone TEXT,
+  pharmacy_note TEXT,
+  delivery TEXT NOT NULL CHECK (delivery IN ('print', 'fax', 'phone', 'external')),
+  pdmp_checked INTEGER NOT NULL DEFAULT 0,
+  written_on TEXT NOT NULL,
+  signed_at TEXT NOT NULL DEFAULT (datetime('now')),
+  prints INTEGER NOT NULL DEFAULT 0,
+  medication_id INTEGER REFERENCES medications(id),
+  renewed_from INTEGER REFERENCES prescriptions(id),
+  ended_at TEXT, ended_by INTEGER REFERENCES users(id), end_reason TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_prescriptions_patient ON prescriptions(patient_id, written_on);
+CREATE INDEX IF NOT EXISTS idx_prescriptions_prescriber ON prescriptions(prescriber_id, written_on);

@@ -351,6 +351,7 @@ function editUserForm(req, user, v = user, errors = []) {
           <div class="form-actions"><button class="btn btn--primary" type="submit">Save changes</button></div>
         </form>
         <div class="stack">
+          ${require("./rx").prescriberCard(req, user)}
           <form class="card" method="post" action="/ehr/admin/users/${user.id}/reset-password">
             ${csrfField(req)}
             <h2>Reset password</h2>

@@ -41,6 +41,11 @@ function migrate(db, schema) {
     ],
     // HIPAA hardening (see docs/hipaa/)
     users: [
+      ["can_prescribe", "INTEGER NOT NULL DEFAULT 0"],      // may write prescriptions (routes/rx.js)
+      ["dea_number", "TEXT"],                                // needed for controlled substances
+      ["dea_expires", "TEXT"],
+      ["license_number", "TEXT"],                            // state prescriptive license
+      ["license_state", "TEXT"],
       ["supervisor_id", "INTEGER REFERENCES users(id)"],  // clinical supervisor who co-signs this user's notes
       ["digest_email", "INTEGER NOT NULL DEFAULT 1"],      // end-of-day outstanding-notes email (src/digest.js)
       ["requires_cosign", "INTEGER"],         // 1 / 0 override; NULL = decide from credentials (src/supervision.js)

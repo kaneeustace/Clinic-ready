@@ -122,6 +122,7 @@ const NAV = [
   { group: "Workspace", key: "census", href: "/ehr/census", label: "Census", perm: "patients:read", icon: "M4 20V10M10 20V4M16 20v-7M22 20H2" },
   { group: "Workspace", key: "notes", href: "/ehr/notes", label: "My notes", perm: "clinical:write", icon: "M6 3h9l4 4v14H6zM9 12h7M9 16h5" },
   { group: "Workspace", key: "trt", href: "/ehr/trt", label: "Hormone therapy", perm: "clinical:read", feature: "trt", icon: "M10 2v6L4 20h16L14 8V2M8 2h8M7 15h10" },
+  { group: "Workspace", key: "rx", href: "/ehr/prescriptions", label: "Prescriptions", perm: "clinical:read", icon: "M6 3h7a4 4 0 0 1 0 8H6zM6 11v10M10 11l9 10M19 13l-7 8" },
   { group: "Workspace", key: "scan", href: "/ehr/scan", label: "Note scanner", perm: "clinical:write", icon: "M7 3h7l5 5v13H7zM14 3v5h5M10 13h6M10 17h4M4 8v13" },
   { group: "Operations", key: "requests", href: "/ehr/requests", label: "Intake requests", perm: "requests:manage", icon: "M4 6h16v12H4zM4 7l8 6 8-6" },
   { group: "Operations", key: "billing", href: "/ehr/billing", label: "Billing", perm: "billing:read", icon: "M3 6h18v12H3zM3 10h18M7 15h4" },
@@ -236,7 +237,7 @@ function page(req, { title, active = "", body, bare = false }) {
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/ehr/static/ehr.css?v=22">${brandCss(clinic) ? raw(`<style>${brandCss(clinic)}</style>`) : ""}
+  <link rel="stylesheet" href="/ehr/static/ehr.css?v=23">${brandCss(clinic) ? raw(`<style>${brandCss(clinic)}</style>`) : ""}
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
@@ -253,6 +254,7 @@ const CHART_TABS = [
   { key: "notes", label: "Notes", path: "/notes", perm: "clinical:read" },
   { key: "plan", label: "Treatment plan", path: "/treatment-plan", perm: "clinical:read" },
   { key: "measures", label: "Measures", path: "/measures", perm: "clinical:read" },
+  { key: "rx", label: "Prescriptions", path: "/prescriptions", perm: "clinical:read" },
   { key: "billing", label: "Billing", path: "/billing", perm: "billing:read" },
   { key: "loc", label: "Level of care", path: "/level-of-care", perm: "patients:read" },
   { key: "trt", label: "Hormone therapy", path: "/trt", perm: "clinical:read", feature: "trt" },

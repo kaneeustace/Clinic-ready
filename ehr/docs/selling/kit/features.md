@@ -9,8 +9,16 @@ What ChartReady does today, by area. If something isn't on this list, assume it 
 - Patient search, demographics, contacts, insurance, allergies and medications.
 - ICD-10 problem list, with common behavioral health codes ready to pick.
 - Duplicate-patient detection.
-- Chart tabs: Overview, Appointments, Notes, Treatment plan, Measures, Billing, Level of care, Hormone therapy (when turned on), Pictures.
+- Chart tabs: Overview, Appointments, Notes, Treatment plan, Measures, Prescriptions, Billing, Level of care, Hormone therapy (when turned on), Pictures.
 - The chart banner shows the client's photo, current level of care and any safety flags.
+
+## Prescriptions
+
+- Administrators choose who can prescribe and record each prescriber's DEA number (validated), expiry and state license.
+- Write from scratch or a template, sign with your password, then print for a hand signature, fax, phone in, or record an outside e-prescription.
+- Federal controlled-substance rules built in: refill limits, DEA number required, C-II not faxed or phoned, PDMP check confirmation.
+- Allergy and duplicate checks; renew, discontinue or void; signed prescriptions update the medication list; log with CSV export.
+- Not included: electronic prescribing of controlled substances (EPCS) or a Surescripts connection.
 
 ## Hormone therapy (TRT), optional
 

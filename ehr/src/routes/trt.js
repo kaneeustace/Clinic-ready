@@ -186,6 +186,16 @@ function bannerPill(db, user, patient) {
   return html`<a class="pill pill--trt" href="${href}">TRT: ${humanize(prog.status)}${next ? ` · next dose ${fmtDate(next)}` : ""}</a>`;
 }
 
+/** Active testosterone prescriptions on the TRT tab, with a shortcut to write one. */
+function rxSummary(db, user, patient) {
+  const rows = db.prepare("SELECT id, drug, strength, sig, refills, written_on FROM prescriptions WHERE patient_id = ? AND status = 'active' AND lower(drug) LIKE '%testosterone%' ORDER BY written_on DESC").all(patient.id);
+  const writer = require("./rx").canWriteRx(db, user);
+  const base = `/ehr/patients/${patient.id}/prescriptions`;
+  return html`<div class="trt-rx">
+    <p class="small"><strong>Prescriptions:</strong> ${rows.length ? rows.map((r) => html`${r.drug} ${r.strength || ""} (${fmtDate(r.written_on)}, ${r.refills} refill${r.refills === 1 ? "" : "s"}) `) : html`<span class="muted">no active testosterone prescription</span>`}
+      · <a href="${base}">All prescriptions</a>${writer ? html` · <a href="${base}?template=cypionate#write">Write a testosterone prescription</a>` : ""}</p></div>`;
+}
+
 /* ------------------------------------------------------------------ */
 /* Form helpers                                                        */
 /* ------------------------------------------------------------------ */
@@ -328,6 +338,7 @@ function trtTab(req, res, patient, { form = null, v = {}, e = {} } = {}, status 
         </dl>` : html`<p class="muted">No testosterone therapy recorded for this client.</p>`}
       ${flags.length ? html`<ul class="trt-flags" aria-label="Alerts">${flags.map((f) => html`<li class="alert alert--${f.tone === "bad" ? "error" : f.tone === "warn" ? "warn" : "info"}">${f.text}</li>`)}</ul>` : ""}
       ${prog && flags.some((f) => f.tone === "bad") ? html`<p class="hint">Alert levels are set by your medical director on the <a href="/ehr/trt/settings">hormone therapy settings</a> page. They are reminders, not orders.</p>` : ""}
+      ${rxSummary(db, u, patient)}
       ${programForm}
     </section>`;
 
