@@ -9,8 +9,17 @@ What ChartReady does today, by area. If something isn't on this list, assume it 
 - Patient search, demographics, contacts, insurance, allergies and medications.
 - ICD-10 problem list, with common behavioral health codes ready to pick.
 - Duplicate-patient detection.
-- Chart tabs: Overview, Appointments, Notes, Treatment plan, Measures, Billing, Level of care, Pictures.
+- Chart tabs: Overview, Appointments, Notes, Treatment plan, Measures, Billing, Level of care, Hormone therapy (when turned on), Pictures.
 - The chart banner shows the client's photo, current level of care and any safety flags.
+
+## Hormone therapy (TRT), optional
+
+- Turned on per clinic in Clinic settings → Programs. Off by default.
+- Regimen per client: medication, dose, route, frequency, prescriber, start date, other medications.
+- Labs: total and free testosterone, estradiol, hematocrit, hemoglobin, PSA, LH and FSH, with draw timing.
+- Alerts for high hematocrit, high or rising PSA, testosterone outside target, missing baseline and labs due or overdue. Thresholds are set by the clinic's medical director.
+- Dose log: given in clinic or dispensed for home, lot, volume, injection site rotation. Mistakes are voided, never deleted.
+- Schedule III stock record: lots received, every dose deducted, witnessed waste, admin-only count corrections, CSV export.
 
 ## Scheduling
 

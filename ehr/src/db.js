@@ -31,6 +31,9 @@ function migrate(db, schema) {
   ];
   // Columns added after first release (ALTER TABLE ADD COLUMN is safe and instant in SQLite).
   const ADD_COLUMNS = {
+    clinic_settings: [
+      ["trt_enabled", "INTEGER NOT NULL DEFAULT 0"],         // hormone therapy (TRT) module on/off (routes/trt.js)
+    ],
     checkins: [
       ["quick", "INTEGER NOT NULL DEFAULT 0"],              // returning client: one-tap check-in (routes/checkin.js)
       ["link_sent_at", "TEXT"],                              // when the check-in link was emailed/texted automatically

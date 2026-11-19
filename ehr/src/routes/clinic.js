@@ -109,9 +109,35 @@ function clinicPage(req, res, { v = null, e = {}, logoError = null } = {}, statu
           </form>
           ${c.hasLogo ? html`<form method="post" action="/ehr/admin/clinic/logo/delete" data-confirm="Remove the logo?">${csrfField(req)}<button class="btn btn--sm btn--ghost" type="submit">Remove logo</button></form>` : ""}
         </section>
+        ${programsCard(req)}
       </div>`,
   }));
 }
+
+/** Optional programs a clinic can turn on. Off by default so a behavioral health clinic doesn't see medical tools. */
+function programsCard(req) {
+  const on = require("./trt").trtEnabled(req.db);
+  return html`
+    <form class="card stack" id="programs" method="post" action="/ehr/admin/clinic/programs">
+      ${csrfField(req)}
+      <h2>Programs</h2>
+      <p class="muted small">Turn on extra tools for the kinds of care your clinic provides.</p>
+      <label class="check"><input type="checkbox" name="trt_enabled" value="1" ${on ? raw("checked") : ""}>
+        <span><strong>Hormone therapy (testosterone replacement, TRT)</strong><br>
+        <span class="hint">Adds a Hormone therapy tab to each chart (regimen, labs, doses, vitals), a client list with labs and doses due, and a Schedule III stock record.</span></span></label>
+      <div class="row"><button class="btn btn--sm btn--primary" type="submit">Save programs</button>${on ? html` <a class="btn btn--sm" href="/ehr/trt">Open hormone therapy</a>` : ""}</div>
+    </form>`;
+}
+
+router.post("/admin/clinic/programs", adminOnly, (req, res) => {
+  const trt = require("./trt");
+  const on = (req.body || {}).trt_enabled === "1";
+  const was = trt.trtEnabled(req.db);
+  trt.setTrtEnabled(req.db, on);
+  if (on !== was) audit(req, "update", "clinic_settings", 1, null, `trt ${on ? "on" : "off"}`);
+  req.flash("success", on ? "Hormone therapy is on. Each chart now has a Hormone therapy tab." : "Hormone therapy is off. Its records are kept and come back if you turn it on again.");
+  res.redirect("/ehr/admin/clinic#programs");
+});
 
 router.get("/admin/clinic", adminOnly, (req, res) => clinicPage(req, res));
 

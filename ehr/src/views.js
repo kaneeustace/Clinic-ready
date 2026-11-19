@@ -121,6 +121,7 @@ const NAV = [
   { group: "Workspace", key: "schedule", href: "/ehr/schedule", label: "Schedule", perm: "schedule:read", icon: "M4 6h16v14H4zM4 10h16M9 3v4M15 3v4" },
   { group: "Workspace", key: "census", href: "/ehr/census", label: "Census", perm: "patients:read", icon: "M4 20V10M10 20V4M16 20v-7M22 20H2" },
   { group: "Workspace", key: "notes", href: "/ehr/notes", label: "My notes", perm: "clinical:write", icon: "M6 3h9l4 4v14H6zM9 12h7M9 16h5" },
+  { group: "Workspace", key: "trt", href: "/ehr/trt", label: "Hormone therapy", perm: "clinical:read", feature: "trt", icon: "M10 2v6L4 20h16L14 8V2M8 2h8M7 15h10" },
   { group: "Workspace", key: "scan", href: "/ehr/scan", label: "Note scanner", perm: "clinical:write", icon: "M7 3h7l5 5v13H7zM14 3v5h5M10 13h6M10 17h4M4 8v13" },
   { group: "Operations", key: "requests", href: "/ehr/requests", label: "Intake requests", perm: "requests:manage", icon: "M4 6h16v12H4zM4 7l8 6 8-6" },
   { group: "Operations", key: "billing", href: "/ehr/billing", label: "Billing", perm: "billing:read", icon: "M3 6h18v12H3zM3 10h18M7 15h4" },
@@ -144,7 +145,7 @@ function flashes(req) {
 
 /** Phone tab bar: the first four workspace items plus a "More" sheet with everything else and sign out. */
 function bottomNav(req, user, active) {
-  const items = NAV.filter((n) => !n.perm || can(user, n.perm));
+  const items = NAV.filter((n) => shown(req.db, user, n));
   const main = items.filter((n) => n.group === "Workspace").slice(0, 4);
   const rest = items.filter((n) => !main.includes(n));
   const short = { dashboard: "Home", notes: "Notes" };
@@ -180,7 +181,7 @@ function page(req, { title, active = "", body, bare = false }) {
           <a class="sidebar__brand" href="/ehr">${brandMark(clinic)}<span>${clinic.name}<small>${clinic.tagline}</small></span></a>
           <nav>
             ${["Workspace", "Operations"].map((g) => {
-              const items = NAV.filter((n) => n.group === g && (!n.perm || can(user, n.perm)));
+              const items = NAV.filter((n) => n.group === g && shown(req.db, user, n));
               return items.length ? html`
                 <p class="sidebar__label">${g}</p>
                 <ul>${items.map((n) => html`
@@ -235,7 +236,7 @@ function page(req, { title, active = "", body, bare = false }) {
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/ehr/static/ehr.css?v=21">${brandCss(clinic) ? raw(`<style>${brandCss(clinic)}</style>`) : ""}
+  <link rel="stylesheet" href="/ehr/static/ehr.css?v=22">${brandCss(clinic) ? raw(`<style>${brandCss(clinic)}</style>`) : ""}
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
@@ -254,8 +255,15 @@ const CHART_TABS = [
   { key: "measures", label: "Measures", path: "/measures", perm: "clinical:read" },
   { key: "billing", label: "Billing", path: "/billing", perm: "billing:read" },
   { key: "loc", label: "Level of care", path: "/level-of-care", perm: "patients:read" },
+  { key: "trt", label: "Hormone therapy", path: "/trt", perm: "clinical:read", feature: "trt" },
   { key: "photos", label: "Pictures", path: "/photos", perm: "patients:read" },
 ];
+/** Optional modules a clinic turns on in Clinic settings (e.g. hormone therapy). */
+function featureOn(db, key) {
+  if (key === "trt") return require("./routes/trt").trtEnabled(db);
+  return true;
+}
+const shown = (db, user, item) => (!item.perm || can(user, item.perm)) && (!item.feature || featureOn(db, item.feature));
 
 /** Load a patient by id or return null. */
 function getPatient(req, id) {
@@ -322,6 +330,7 @@ function chartPage(req, patient, tab, body, { title } = {}) {
           ${flagged ? html`<span class="pill pill--bad">Safety flag: positive suicide risk screen in last 30 days</span>` : ""}
           ${planPill}
           ${require("./routes/loc").bannerPill(req.db, req.user, patient)}
+          ${require("./routes/trt").bannerPill(req.db, req.user, patient)}
         </div>
       </div>
       <div class="chart-head__actions">
@@ -330,7 +339,7 @@ function chartPage(req, patient, tab, body, { title } = {}) {
       </div>
     </section>
     <nav class="tabs" aria-label="Chart sections">
-      ${CHART_TABS.filter((t) => can(req.user, t.perm)).map((t) => html`
+      ${CHART_TABS.filter((t) => shown(req.db, req.user, t)).map((t) => html`
         <a href="${base + t.path}" ${t.key === tab ? raw('aria-current="page"') : ""}>${t.label}</a>`)}
     </nav>`;
   // Printed on every page (AHCCCS/AMPM 940: member name and AHCCCS ID or DOB on each page).

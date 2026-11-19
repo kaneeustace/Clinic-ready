@@ -575,3 +575,117 @@ CREATE TABLE IF NOT EXISTS sales_leads (
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT
 );
+
+-- ---------------------------------------------------------------------------------------------------------------
+-- Hormone therapy (testosterone replacement, TRT). Turned on per clinic (clinic_settings.trt_enabled). routes/trt.js
+-- ---------------------------------------------------------------------------------------------------------------
+-- One program per client: the current regimen. Changes are audited; the dose log keeps what was actually given.
+CREATE TABLE IF NOT EXISTS trt_programs (
+  id INTEGER PRIMARY KEY,
+  patient_id INTEGER NOT NULL UNIQUE REFERENCES patients(id),
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('evaluating', 'active', 'paused', 'stopped')),
+  medication TEXT NOT NULL,
+  dose_mg REAL,
+  route TEXT,
+  frequency_days INTEGER,
+  ancillary TEXT,
+  prescriber_id INTEGER REFERENCES users(id),
+  start_date TEXT,
+  goals TEXT,
+  stop_reason TEXT,
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Lab results. Units: total T ng/dL, free T pg/mL, estradiol pg/mL, hematocrit %, hemoglobin g/dL, PSA ng/mL, LH/FSH mIU/mL.
+CREATE TABLE IF NOT EXISTS trt_labs (
+  id INTEGER PRIMARY KEY,
+  patient_id INTEGER NOT NULL REFERENCES patients(id),
+  drawn_on TEXT NOT NULL,
+  timing TEXT,
+  total_t REAL, free_t REAL, estradiol REAL, hematocrit REAL, hemoglobin REAL, psa REAL, lh REAL, fsh REAL,
+  notes TEXT,
+  entered_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_trt_labs_patient ON trt_labs(patient_id, drawn_on);
+
+-- Controlled-substance stock (testosterone is Schedule III). One row per lot received.
+CREATE TABLE IF NOT EXISTS trt_lots (
+  id INTEGER PRIMARY KEY,
+  product TEXT NOT NULL,
+  ndc TEXT,
+  lot_number TEXT NOT NULL,
+  expiration TEXT NOT NULL,
+  concentration_mg_ml REAL NOT NULL,
+  supplier TEXT,
+  invoice TEXT,
+  received_on TEXT NOT NULL,
+  received_by INTEGER REFERENCES users(id),
+  closed_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Doses given in clinic or dispensed for home use. Never deleted: a mistake is voided with a reason.
+CREATE TABLE IF NOT EXISTS trt_doses (
+  id INTEGER PRIMARY KEY,
+  patient_id INTEGER NOT NULL REFERENCES patients(id),
+  given_on TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('administered', 'dispensed')),
+  medication TEXT NOT NULL,
+  lot_id INTEGER REFERENCES trt_lots(id),
+  dose_mg REAL,
+  volume_ml REAL,
+  days_supply INTEGER,
+  site TEXT,
+  notes TEXT,
+  given_by INTEGER REFERENCES users(id),
+  voided_at TEXT, voided_by INTEGER REFERENCES users(id), void_reason TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_trt_doses_patient ON trt_doses(patient_id, given_on);
+
+-- Running record for every lot: received, administered, dispensed, wasted (witnessed), adjusted. Append-only.
+-- quantity_ml is signed: positive adds stock, negative removes it. On hand = SUM(quantity_ml) per lot.
+CREATE TABLE IF NOT EXISTS trt_ledger (
+  id INTEGER PRIMARY KEY,
+  lot_id INTEGER NOT NULL REFERENCES trt_lots(id),
+  event TEXT NOT NULL CHECK (event IN ('received', 'administered', 'dispensed', 'wasted', 'adjustment', 'void')),
+  quantity_ml REAL NOT NULL,
+  occurred_on TEXT NOT NULL,
+  patient_id INTEGER REFERENCES patients(id),
+  dose_id INTEGER REFERENCES trt_doses(id),
+  witness_id INTEGER REFERENCES users(id),
+  reason TEXT,
+  user_id INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_trt_ledger_lot ON trt_ledger(lot_id);
+
+-- Visit check: vitals and a simple 0-10 symptom check (not a licensed questionnaire).
+CREATE TABLE IF NOT EXISTS trt_visits (
+  id INTEGER PRIMARY KEY,
+  patient_id INTEGER NOT NULL REFERENCES patients(id),
+  visit_date TEXT NOT NULL,
+  bp_sys INTEGER, bp_dia INTEGER, heart_rate INTEGER, weight_lb REAL,
+  energy INTEGER, libido INTEGER, mood INTEGER, sleep INTEGER,
+  side_effects TEXT,
+  entered_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_trt_visits_patient ON trt_visits(patient_id, visit_date);
+
+-- Alert thresholds and lab schedule, set by the clinic's medical director. One row.
+CREATE TABLE IF NOT EXISTS trt_settings (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  hct_max REAL NOT NULL DEFAULT 54,
+  psa_max REAL NOT NULL DEFAULT 4,
+  psa_rise REAL NOT NULL DEFAULT 1.4,
+  t_low REAL NOT NULL DEFAULT 400,
+  t_high REAL NOT NULL DEFAULT 700,
+  first_labs_days INTEGER NOT NULL DEFAULT 90,
+  labs_every_days INTEGER NOT NULL DEFAULT 180,
+  updated_by INTEGER REFERENCES users(id),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
