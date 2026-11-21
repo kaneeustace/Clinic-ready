@@ -1,5 +1,5 @@
 /* ChartReady sales site. Editorial and plain: paper, ink, one accent, hairline rules, a serif for headings. */
-:root { --ink: #1f2328; --text: #2b2f34; --muted: #61666c; --line: #e2dfd8; --paper: #f6f5f1; --tint: #efede7; --accent: #2b5c8f; --accent-dark: #1f4670;
+:root { --ink: #1f2328; --text: #2b2f34; --muted: #61666c; --line: #e2dfd8; --paper: #f6f5f1; --tint: #efede7; --accent: #315de7; --accent-dark: #2448c2;
   --good: #2f6b45; --good-bg: #e8f1eb; --bad: #9b2c22; --bad-bg: #f8e9e6;
   --serif: "Source Serif 4", Georgia, "Times New Roman", serif; --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif; }
 * { box-sizing: border-box; }
@@ -18,8 +18,8 @@ code { font-size: .85em; background: var(--tint); padding: .05rem .3rem; border-
 .skip { position: absolute; left: -999px; } .skip:focus { left: 1rem; top: 1rem; background: #fff; padding: .5rem 1rem; z-index: 99; }
 .muted { color: var(--muted); } .small { font-size: .88rem; }
 
-.btn { display: inline-block; padding: .6rem 1.1rem; border-radius: 4px; background: var(--ink); color: #fff; font: 500 .95rem/1.3 var(--sans); text-decoration: none; border: 1px solid var(--ink); cursor: pointer; }
-.btn:hover { background: #000; color: #fff; }
+.btn { display: inline-block; padding: .6rem 1.1rem; border-radius: 4px; background: var(--accent); color: #fff; font: 500 .95rem/1.3 var(--sans); text-decoration: none; border: 1px solid var(--accent); cursor: pointer; }
+.btn:hover { background: var(--accent-dark); border-color: var(--accent-dark); color: #fff; }
 .btn--lg { padding: .8rem 1.35rem; font-size: 1rem; }
 .link-arrow { margin-left: .75rem; color: var(--ink); }
 .link-arrow::after { content: " →"; }

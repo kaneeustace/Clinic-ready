@@ -763,7 +763,7 @@ tr.is-voided td:last-child { text-decoration: none; }
 :root {
   --bg: #f6f5f1; --surface: #fff; --surface-2: #faf9f6; --surface-3: #efede8;
   --text: #1f2328; --muted: #5f6368; --faint: #8b8f94; --border: #e2dfd8; --border-strong: #cfcbc2;
-  --primary: #2b5c8f; --primary-dark: #1f4670; --primary-light: #eaf0f6; --primary-ring: rgba(43, 92, 143, .22);
+  --primary: #315de7; --primary-dark: #2448c2; --primary-light: #eaf0fe; --primary-ring: rgba(49, 93, 231, .18);
   --side: #efede7; --side-text: #3b3f45;
   --radius: 6px; --radius-sm: 4px;
   --shadow: none; --shadow-lg: 0 8px 24px rgba(31, 35, 40, .08);

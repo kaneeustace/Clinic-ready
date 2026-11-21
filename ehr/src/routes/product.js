@@ -182,7 +182,7 @@ function productPage(req, res, { sent = false, error = null, values = {} } = {},
 <link rel="icon" href="/ehr/static/icons/icon-32.png" type="image/png">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/ehr/static/product.css?v=2">
+<link rel="stylesheet" href="/ehr/static/product.css?v=3">
 </head><body>${body}</body></html>`);
 }
 

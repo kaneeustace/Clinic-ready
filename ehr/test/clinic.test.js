@@ -26,7 +26,7 @@ test("clinic settings: validated, saved, and shown across the app", async () => 
   const dash = await admin.get("/ehr");
   assert.match(dash.text, /Sunrise Counseling/);
   assert.match(dash.text, /<title>[^<]*Sunrise Counseling<\/title>/);
-  assert.match(dash.text, /--primary:#1d7069/);
+  assert.match(dash.text, /--primary:#0f8f86/);
   const login = await t.client().get("/ehr/login");
   assert.match(login.text, /Sunrise Counseling/);
   const man = JSON.parse((await t.client().get("/ehr/manifest.webmanifest")).text);
