@@ -754,3 +754,136 @@ tr.is-voided td:last-child { text-decoration: none; }
 .rx-sign { margin-top: 2.5rem; }
 .rx-line { border-bottom: 1px solid #111; height: 2.2rem; width: 60%; }
 @media print { .rx-paper { box-shadow: none; border: none; margin: 0; padding: 0; } }
+
+/* =====================================================================================================
+   House style (v2). Quieter and more editorial: paper background, hairline rules instead of shadows,
+   flat buttons, a serif for headings, sentence-case labels, no gradients or decorative accent bars.
+   This layer comes last on purpose and overrides the earlier "polish" rules above.
+   ===================================================================================================== */
+:root {
+  --bg: #f6f5f1; --surface: #fff; --surface-2: #faf9f6; --surface-3: #efede8;
+  --text: #1f2328; --muted: #5f6368; --faint: #8b8f94; --border: #e2dfd8; --border-strong: #cfcbc2;
+  --primary: #2b5c8f; --primary-dark: #1f4670; --primary-light: #eaf0f6; --primary-ring: rgba(43, 92, 143, .22);
+  --side: #efede7; --side-text: #3b3f45;
+  --radius: 6px; --radius-sm: 4px;
+  --shadow: none; --shadow-lg: 0 8px 24px rgba(31, 35, 40, .08);
+  --font: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --serif: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --grad-brand: var(--primary);
+}
+body { background: var(--bg); font-size: 14.5px; font-feature-settings: normal; }
+::selection { background: var(--primary-light); }
+h1, .chart-head__name, .hero h1, .login__card h1 { font-family: var(--serif); font-weight: 600; letter-spacing: -.01em; }
+h2 { font-weight: 600; letter-spacing: 0; }
+:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 2px; }
+
+/* Brand mark: a plain square in the clinic colour */
+.logo-dot { background: var(--primary); border-radius: 5px; box-shadow: none; }
+.avatar, .topbar__me .avatar, .chart-head > .avatar--lg { background: var(--surface-3); color: var(--side-text); box-shadow: none; }
+.chart-head > .avatar--lg { box-shadow: 0 0 0 1px var(--border); }
+
+/* Sidebar: light, like a paper index */
+@media (min-width: 960px) { .app { background: linear-gradient(to right, var(--side) 248px, var(--bg) 248px); } }
+.sidebar { background: var(--side); color: var(--side-text); box-shadow: inset -1px 0 0 var(--border); }
+.sidebar__brand, .sidebar__brand:hover { color: var(--text); }
+.sidebar__brand small, .sidebar__user small { color: var(--muted); }
+.sidebar__label { text-transform: none; letter-spacing: 0; font-size: .78rem; font-weight: 500; color: var(--faint); }
+.sidebar nav a { color: var(--side-text); font-weight: 500; border-radius: 4px; }
+.sidebar nav a svg { opacity: .7; }
+.sidebar nav a:hover { background: rgba(31, 35, 40, .05); color: var(--text); }
+.sidebar nav a[aria-current="page"] { background: var(--surface); color: var(--text); box-shadow: 0 0 0 1px var(--border); font-weight: 600; }
+.sidebar nav a[aria-current="page"]::before { left: -.85rem; width: 2px; border-radius: 0; background: var(--primary); }
+.sidebar nav a[aria-current="page"] svg { opacity: 1; color: var(--primary); }
+.sidebar__foot { border-top-color: var(--border); }
+.sidebar__user, .sidebar__user:hover { color: var(--text); }
+.sidebar__user:hover { background: rgba(31, 35, 40, .05); }
+.sidebar__user .avatar { background: var(--surface); color: var(--side-text); box-shadow: 0 0 0 1px var(--border); }
+
+/* Top bar */
+.topbar { background: var(--bg); backdrop-filter: none; -webkit-backdrop-filter: none; border-bottom: 1px solid var(--border); }
+.topbar__search input { border-radius: 4px; box-shadow: none; }
+.topbar__demo { text-transform: none; letter-spacing: 0; border-radius: 4px; }
+
+/* Cards: hairline boxes, no shadows, no accent bars */
+.card, .tile, .table-wrap, .chart-head, .tabs, .wb-col, .login__card, .alert, fieldset { border-radius: var(--radius); box-shadow: none; }
+.card { border-color: var(--border); padding: 1.25rem 1.4rem; margin-bottom: 1rem; }
+.card__head h2, .card > h2:first-child { display: block; font-size: 1.05rem; font-weight: 600; }
+.card__head h2::before, .card > h2:first-child::before { content: none; }
+.card--alert { background: var(--surface); border-color: #e8c4bf; }
+.card--alert h2 { color: var(--bad); }
+.card--muted { background: var(--surface-2); }
+
+/* Dashboard greeting: plain text, not a banner */
+.hero { background: none; color: var(--text); box-shadow: none; border-radius: 0; padding: .25rem 0 1.1rem; margin-bottom: 1.25rem; border-bottom: 1px solid var(--border); }
+.hero::after { content: none; }
+.hero h1 { color: var(--text); font-size: 1.9rem; }
+.hero p { color: var(--muted); }
+.hero .hero__date { text-transform: none; letter-spacing: 0; font-size: .9rem; font-weight: 500; color: var(--muted); }
+.btn--light { background: var(--primary); color: #fff; border-color: var(--primary); }
+.btn--light:hover { background: var(--primary-dark); color: #fff; border-color: var(--primary-dark); }
+.btn--glass { background: var(--surface); color: var(--text); border-color: var(--border-strong); }
+.btn--glass:hover { background: var(--surface-3); color: var(--text); border-color: var(--border-strong); }
+
+/* Numbers */
+.tile { border-color: var(--border); padding: 1rem 1.15rem; }
+.tile::before { content: none; }
+.tile:hover { transform: none; box-shadow: none; border-color: var(--border-strong); }
+.tile__num { font-family: var(--serif); font-weight: 600; font-size: 2rem; background: none; -webkit-background-clip: initial; background-clip: initial; color: var(--text); }
+.tile__label { font-weight: 400; }
+
+/* Buttons: flat */
+.btn { border-radius: 4px; box-shadow: none; font-weight: 500; }
+.btn:active { transform: none; }
+.btn--primary { background: var(--primary); border-color: var(--primary); box-shadow: none; }
+.btn--primary:hover { background: var(--primary-dark); border-color: var(--primary-dark); }
+
+/* Forms */
+input, select, textarea { border-radius: 4px; border-color: var(--border-strong); }
+input:hover, select:hover, textarea:hover { border-color: var(--faint); }
+fieldset { background: var(--surface-2); border-color: var(--border); }
+
+/* Badges and pills: small labels, no dots */
+.badge, .pill { border-radius: 3px; font-weight: 500; letter-spacing: 0; }
+.badge::before { content: none; }
+.alert--success { background: var(--good-bg); }
+
+/* Tables: rules, sentence-case headings */
+.table-wrap { border-color: var(--border); }
+.table th { background: transparent; color: var(--muted); text-transform: none; letter-spacing: 0; font-size: .8rem; font-weight: 600; border-bottom: 1px solid var(--border-strong); }
+.table tbody tr:nth-child(even) { background: transparent; }
+.table tbody tr:hover { background: var(--surface-2); }
+
+/* Sentence-case labels everywhere else */
+.chart-head__meta dt, .chart-head__dx-label, .note-section h3, .cal__day h3, .plan-num, .plan-sub, .measure__nums small,
+.note-subhead, .wb-col h3, .section-title, .trt-due dt {
+  text-transform: none; letter-spacing: 0; font-weight: 500;
+}
+.chart-head__meta dt, .chart-head__dx-label { font-size: .78rem; color: var(--muted); }
+
+/* Patient banner and tabs */
+.chart-head { border-color: var(--border); }
+.chart-head::before { content: none; }
+.tabs { border-color: var(--border); padding: 0 .75rem; gap: 0; }
+.tabs a { border-radius: 0; padding: .75rem .8rem; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.tabs a:hover { background: none; color: var(--text); border-bottom-color: var(--border-strong); }
+.tabs a[aria-current="page"] { background: none; color: var(--text); box-shadow: none; border-bottom-color: var(--primary); font-weight: 600; }
+
+/* Workboard: neutral columns */
+.wb-col { background: var(--surface-2); }
+.wb-col--todo, .wb-col--progress, .wb-col--done { border-top: 1px solid var(--border); }
+
+/* Progress bars and small decorations */
+.progress > span, .ci__progress i, .roster__bar i, .onboard__bar i { background: var(--primary); }
+.ci__done { background: var(--good); }
+.onboard { background: var(--surface); border-color: var(--border); }
+.clinic-callout, .clinic-callout--todo { background: var(--surface); border-color: var(--border); }
+
+/* Sign-in */
+.login { background: var(--bg); }
+.login__card { box-shadow: none; border: 1px solid var(--border); }
+
+@media (max-width: 759px) {
+  .bottomnav { background: var(--surface); border-top: 1px solid var(--border); box-shadow: none; }
+  .bottomnav__sheet { border-radius: 8px; border: 1px solid var(--border); box-shadow: var(--shadow-lg); }
+  .bottomnav__sheet a, .bottomnav__sheet button { border-radius: 4px; }
+}

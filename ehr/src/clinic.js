@@ -5,12 +5,12 @@
  * home-screen app name. Defaults come from EHR_CLINIC_NAME, then the product name (ChartReady).
  */
 const COLORS = {
-  blue: { label: "Blue", primary: "#315de7", dark: "#2448c2", light: "#eaf0fe", ring: "rgba(49,93,231,.18)" },
-  teal: { label: "Teal", primary: "#0f8f86", dark: "#0b6f68", light: "#e3f5f3", ring: "rgba(15,143,134,.2)" },
-  purple: { label: "Purple", primary: "#6d4ae0", dark: "#5534c2", light: "#efeafd", ring: "rgba(109,74,224,.18)" },
-  green: { label: "Green", primary: "#1f8a4c", dark: "#176b3a", light: "#e6f5ec", ring: "rgba(31,138,76,.2)" },
-  rose: { label: "Rose", primary: "#d1406b", dark: "#ab2f55", light: "#fdebf0", ring: "rgba(209,64,107,.18)" },
-  slate: { label: "Slate", primary: "#3f5677", dark: "#2f425d", light: "#e9eef5", ring: "rgba(63,86,119,.2)" },
+  blue: { label: "Blue", primary: "#2b5c8f", dark: "#1f4670", light: "#eaf0f6", ring: "rgba(43,92,143,.22)" },
+  teal: { label: "Teal", primary: "#1d7069", dark: "#155650", light: "#e6f1ef", ring: "rgba(29,112,105,.22)" },
+  purple: { label: "Purple", primary: "#5a4a96", dark: "#463978", light: "#eeebf5", ring: "rgba(90,74,150,.22)" },
+  green: { label: "Green", primary: "#2f6b45", dark: "#245336", light: "#e8f1eb", ring: "rgba(47,107,69,.22)" },
+  rose: { label: "Rose", primary: "#9c3d5a", dark: "#7c2f47", light: "#f5e9ed", ring: "rgba(156,61,90,.22)" },
+  slate: { label: "Slate", primary: "#3f5677", dark: "#2f425d", light: "#e9eef5", ring: "rgba(63,86,119,.22)" },
 };
 const FIELDS = ["name", "tagline", "address1", "address2", "city", "state", "zip", "phone", "fax", "email", "website", "npi", "tax_id", "taxonomy", "color"];
 

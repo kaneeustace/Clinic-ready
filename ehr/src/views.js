@@ -236,8 +236,8 @@ function page(req, { title, active = "", body, bare = false }) {
   <link rel="icon" href="/assets/img/favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/ehr/static/ehr.css?v=23">${brandCss(clinic) ? raw(`<style>${brandCss(clinic)}</style>`) : ""}
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/ehr/static/ehr.css?v=24">${brandCss(clinic) ? raw(`<style>${brandCss(clinic)}</style>`) : ""}
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
