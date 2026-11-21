@@ -25,7 +25,7 @@ async function createClient(name, scopes = "system/*.read", part2 = false) {
   const admin = await t.login("admin");
   const r = await admin.post("/ehr/admin/api/clients", { name, scopes, ...(part2 ? { include_part2: "1" } : {}) });
   assert.equal(r.status, 200, r.text.slice(0, 300));
-  return { id: r.text.match(/<code>(cr_[^<]+)<\/code>/)[1], secret: r.text.match(/Client secret<\/dt><dd><code>([^<]+)<\/code>/)[1], admin };
+  return { id: r.text.match(/<code>(cr_[^<]+)<\/code>/)[1], secret: r.text.match(/Client secret[^<]*<\/dt><dd><code>([^<]+)<\/code>/)[1], admin };
 }
 
 test("metadata and SMART discovery are public; everything else needs a token", async () => {
@@ -36,7 +36,7 @@ test("metadata and SMART discovery are public; everything else needs a token", a
   assert.equal(m.body.fhirVersion, "4.0.1");
   assert.ok(m.body.rest[0].resource.some((r) => r.type === "MedicationRequest"));
   const s = await get("/fhir/.well-known/smart-configuration");
-  assert.deepEqual(s.body.grant_types_supported, ["client_credentials"]);
+  assert.deepEqual(s.body.grant_types_supported, ["authorization_code", "client_credentials"]);
   const p = await get(`/fhir/Patient/${pid}`);
   assert.equal(p.status, 401);
   assert.equal(p.body.resourceType, "OperationOutcome");
@@ -131,7 +131,8 @@ test("Observations: screening totals and TRT labs/vitals with LOINC; $everything
   const all = (await get(`/fhir/Patient/${pid}/$everything`, creds.token)).body;
   const types = new Set(all.entry.map((e) => e.resource.resourceType));
   for (const x of ["Patient", "Condition", "Observation", "Organization"]) assert.ok(types.has(x), x);
-  assert.ok(!JSON.stringify(all).includes("note"), "no clinical notes content");
+  const psychotherapy = t.db.prepare("SELECT id FROM notes WHERE type = 'psychotherapy'").all().map((n) => String(n.id));
+  assert.ok(!all.entry.some((e) => e.resource.resourceType === "DocumentReference" && psychotherapy.includes(e.resource.id)), "psychotherapy notes never shared");
 });
 
 test("scopes limit resource types; Part 2 data is withheld unless allowed", async () => {

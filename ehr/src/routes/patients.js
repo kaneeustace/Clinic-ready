@@ -72,6 +72,21 @@ const GENDER_OPTIONS = [
   { value: "", label: "Not recorded" }, { value: "F", label: "Female" }, { value: "M", label: "Male" }, { value: "U", label: "Unknown / not specified" },
 ];
 const AHCCCS_ID_RE = /^[A-Z]\d{8}$/;
+// Race and ethnicity use the federal (OMB) categories so they map to US Core / USCDI. Optional; clients may decline.
+const RACE_OPTIONS = [
+  { value: "", label: "Not recorded" }, { value: "1002-5", label: "American Indian or Alaska Native" }, { value: "2028-9", label: "Asian" },
+  { value: "2054-5", label: "Black or African American" }, { value: "2076-8", label: "Native Hawaiian or Other Pacific Islander" },
+  { value: "2106-3", label: "White" }, { value: "multiple", label: "More than one race" }, { value: "ASKU", label: "Declined to answer" },
+];
+const ETHNICITY_OPTIONS = [
+  { value: "", label: "Not recorded" }, { value: "2135-2", label: "Hispanic or Latino" }, { value: "2186-5", label: "Not Hispanic or Latino" },
+  { value: "ASKU", label: "Declined to answer" },
+];
+const LANGUAGE_OPTIONS = [
+  { value: "", label: "Not recorded" }, { value: "en", label: "English" }, { value: "es", label: "Spanish" }, { value: "nv", label: "Navajo" },
+  { value: "vi", label: "Vietnamese" }, { value: "zh", label: "Chinese" }, { value: "ar", label: "Arabic" }, { value: "tl", label: "Tagalog" },
+  { value: "ase", label: "American Sign Language" }, { value: "other", label: "Other" },
+];
 /*
  * Payer-name suggestions for the insurance form. AHCCCS health plans change with contract cycles:
  * VERIFY this list against the current AHCCCS contracts (and keep src/payers.js AHCCCS_PLANS in step).
@@ -128,7 +143,7 @@ function clinicianOptions(db, currentId) {
 
 const PATIENT_FIELDS = ["first_name", "last_name", "preferred_name", "dob", "sex_at_birth", "gender_identity", "pronouns",
   "phone", "email", "address_line1", "address_line2", "city", "state", "zip", "preferred_contact", "emergency_name",
-  "emergency_relation", "emergency_phone", "primary_clinician_id", "status", "ahcccs_id", "gender"];
+  "emergency_relation", "emergency_phone", "primary_clinician_id", "status", "ahcccs_id", "gender", "race", "ethnicity", "language"];
 
 /** Validate the patient form. Returns { values (for re-render), errors, data (for DB) }. */
 function validatePatient(db, body, { current = null } = {}) {
@@ -156,6 +171,9 @@ function validatePatient(db, body, { current = null } = {}) {
   values.gender = values.gender.toUpperCase();
   if (values.gender && !GENDER_OPTIONS.some((o) => o.value === values.gender)) errors.gender = "Choose an option from the list.";
   if (values.sex_at_birth && !SEX_OPTIONS.some((o) => o.value === values.sex_at_birth)) errors.sex_at_birth = "Choose an option from the list.";
+  for (const [k, list] of [["race", RACE_OPTIONS], ["ethnicity", ETHNICITY_OPTIONS], ["language", LANGUAGE_OPTIONS]]) {
+    if (values[k] && !list.some((o) => o.value === values[k])) errors[k] = "Choose an option from the list.";
+  }
 
   const phone = normalizePhone(values.phone);
   if (phone === false) errors.phone = "Enter a valid phone number, e.g. (555) 010-1234.";
@@ -200,6 +218,7 @@ function validatePatient(db, body, { current = null } = {}) {
     emergency_name: orNull(values.emergency_name), emergency_relation: orNull(values.emergency_relation),
     emergency_phone: orNull(values.emergency_phone), primary_clinician_id: clinicianId, status: values.status,
     ahcccs_id: orNull(values.ahcccs_id), gender: orNull(values.gender),
+    race: orNull(values.race), ethnicity: orNull(values.ethnicity), language: orNull(values.language),
   };
   return { values, errors, data };
 }
@@ -275,6 +294,9 @@ function patientForm(req, { values, errors, patient = null, duplicate = null }) 
           ${field(f, "gender_identity", "Gender identity", { attrs: 'maxlength="120"' })}
           ${field(f, "pronouns", "Pronouns", { hint: "e.g. she/her, he/him, they/them", attrs: 'maxlength="120"' })}
           ${selectField(f, "gender", "Gender (claims / AHCCCS demographics)", GENDER_OPTIONS)}
+          ${selectField(f, "race", "Race", RACE_OPTIONS)}
+          ${selectField(f, "ethnicity", "Ethnicity", ETHNICITY_OPTIONS)}
+          ${selectField(f, "language", "Preferred language", LANGUAGE_OPTIONS)}
           ${field(f, "ahcccs_id", "AHCCCS ID", { hint: "Arizona Medicaid member ID, e.g. A12345678. Turns on AHCCCS documentation and billing rules.", attrs: 'maxlength="12" autocomplete="off"' })}
         </div>
       </fieldset>
@@ -571,6 +593,9 @@ function renderOverview(req, res, patient, state = null, status = 200) {
         <dt>Preferred name</dt><dd>${patient.preferred_name || dash}</dd>
         <dt>Date of birth</dt><dd>${fmtDate(patient.dob)} (${age(patient.dob)} years)</dd>
         <dt>Sex at birth</dt><dd>${patient.sex_at_birth ? (SEX_OPTIONS.find((o) => o.value === patient.sex_at_birth) || {}).label || patient.sex_at_birth : dash}</dd>
+        ${patient.race ? html`<dt>Race</dt><dd>${(RACE_OPTIONS.find((o) => o.value === patient.race) || {}).label || patient.race}</dd>` : ""}
+        ${patient.ethnicity ? html`<dt>Ethnicity</dt><dd>${(ETHNICITY_OPTIONS.find((o) => o.value === patient.ethnicity) || {}).label || patient.ethnicity}</dd>` : ""}
+        ${patient.language ? html`<dt>Preferred language</dt><dd>${(LANGUAGE_OPTIONS.find((o) => o.value === patient.language) || {}).label || patient.language}</dd>` : ""}
         <dt>Gender identity</dt><dd>${patient.gender_identity || dash}</dd>
         <dt>Pronouns</dt><dd>${patient.pronouns || dash}</dd>
         <dt>Gender (claims)</dt><dd>${patient.gender ? (GENDER_OPTIONS.find((o) => o.value === patient.gender) || {}).label || patient.gender : dash}</dd>
@@ -1132,4 +1157,4 @@ router.post("/patients/:id/diagnoses/:did/primary", requirePerm("clinical:write"
   res.redirect(chartUrl(patient, "#diagnoses"));
 });
 
-module.exports = { router, ICD10_COMMON };
+module.exports = { RACE_OPTIONS, ETHNICITY_OPTIONS, LANGUAGE_OPTIONS, router, ICD10_COMMON };

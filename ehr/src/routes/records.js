@@ -711,4 +711,4 @@ router.get("/patients/:id/disclosures/accounting", requireDisclosureView, (req, 
     </article>` }));
 });
 
-module.exports = { router, buildRecord, roiProblem, NOT_ACCOUNTABLE, PART2_NOTICE, PART2_REDISCLOSURE };
+module.exports = { router, buildRecord, noteSections, roiProblem, NOT_ACCOUNTABLE, PART2_NOTICE, PART2_REDISCLOSURE };

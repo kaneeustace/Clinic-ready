@@ -14,8 +14,9 @@ What ChartReady does today, by area. If something isn't on this list, assume it 
 
 ## FHIR API
 
-- Standard FHIR R4 read-only API for partners, labs, HIEs and data warehouses: patients, appointments, problems, allergies, medications, prescriptions, results (LOINC-coded) and insurance.
-- OAuth 2.0 client credentials; administrators create, scope and revoke API clients. Notes are never shared, Part 2 data only when allowed, every call audited.
+- FHIR R4 read-only API built to US Core 6.1, SMART App Launch and Bulk Data, the standards behind ONC's (g)(10) API criterion: patients, visits, problems, allergies, medications and prescriptions, results (LOINC), insurance, clinical notes, treatment plans and goals.
+- SMART apps sign staff in with a consent screen; backend systems use secrets or signed keys and can bulk-export. Administrators register, scope and revoke every client. Psychotherapy notes are never shared, Part 2 data only when allowed, every call audited.
+- Formal ONC certification (Inferno testing and an accredited body) is a separate step.
 
 ## Prescriptions
 

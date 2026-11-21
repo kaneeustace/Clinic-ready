@@ -750,3 +750,48 @@ CREATE TABLE IF NOT EXISTS fhir_tokens (
   expires_at TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- SMART App Launch: one-time authorization codes (stored as sha256), valid 2 minutes.
+CREATE TABLE IF NOT EXISTS fhir_auth_codes (
+  code_hash TEXT PRIMARY KEY,
+  client_ref INTEGER NOT NULL REFERENCES fhir_clients(id),
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  patient_id INTEGER REFERENCES patients(id),
+  scopes TEXT NOT NULL,
+  redirect_uri TEXT NOT NULL,
+  code_challenge TEXT,
+  nonce TEXT,
+  expires_at TEXT NOT NULL,
+  used_at TEXT
+);
+-- Signing key for OpenID Connect id_tokens (private key encrypted at rest when EHR_DATA_KEY is set).
+CREATE TABLE IF NOT EXISTS fhir_keys (
+  kid TEXT PRIMARY KEY,
+  private_pem TEXT NOT NULL,
+  public_jwk TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+-- private_key_jwt assertion IDs already used (replay protection), kept until they expire.
+CREATE TABLE IF NOT EXISTS fhir_jtis (
+  jti TEXT PRIMARY KEY,
+  expires_at TEXT NOT NULL
+);
+-- Bulk Data $export jobs and their NDJSON output (deleted 24 hours after completion).
+CREATE TABLE IF NOT EXISTS fhir_exports (
+  id TEXT PRIMARY KEY,
+  client_ref INTEGER NOT NULL REFERENCES fhir_clients(id),
+  status TEXT NOT NULL DEFAULT 'running' CHECK (status IN ('running', 'done', 'error')),
+  request_url TEXT NOT NULL,
+  transaction_time TEXT NOT NULL,
+  error TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  completed_at TEXT
+);
+CREATE TABLE IF NOT EXISTS fhir_export_files (
+  export_id TEXT NOT NULL REFERENCES fhir_exports(id) ON DELETE CASCADE,
+  n INTEGER NOT NULL,
+  type TEXT NOT NULL,
+  count INTEGER NOT NULL,
+  ndjson TEXT NOT NULL,
+  PRIMARY KEY (export_id, n)
+);

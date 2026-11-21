@@ -31,6 +31,16 @@ function migrate(db, schema) {
   ];
   // Columns added after first release (ALTER TABLE ADD COLUMN is safe and instant in SQLite).
   const ADD_COLUMNS = {
+    fhir_clients: [
+      ["kind", "TEXT NOT NULL DEFAULT 'backend'"],   // backend (system) | smart (signs in a staff user)
+      ["redirect_uris", "TEXT"],              // SMART apps: allowed redirect URIs, one per line
+      ["public_client", "INTEGER NOT NULL DEFAULT 0"], // SMART public app (PKCE, no secret)
+      ["jwks", "TEXT"],                       // public keys (JWK Set JSON) for private_key_jwt sign-in
+    ],
+    fhir_tokens: [
+      ["user_id", "INTEGER REFERENCES users(id)"],   // SMART: the staff user who authorized the app
+      ["patient_id", "INTEGER REFERENCES patients(id)"], // SMART: patient in context (patient/ scopes)
+    ],
     clinic_settings: [
       ["trt_enabled", "INTEGER NOT NULL DEFAULT 0"],         // hormone therapy (TRT) module on/off (routes/trt.js)
     ],
@@ -61,6 +71,9 @@ function migrate(db, schema) {
     ],
     // AHCCCS (Arizona Medicaid) support, see src/payers.js
     patients: [
+      ["race", "TEXT"],                       // OMB race code (CDC race & ethnicity code set), 'multiple' or 'ASKU'
+      ["ethnicity", "TEXT"],                  // OMB ethnicity code or 'ASKU'
+      ["language", "TEXT"],                   // preferred language (BCP-47)
       ["ahcccs_id", "TEXT"],                  // AHCCCS member ID (e.g. A12345678)
       ["gender", "TEXT"],                     // AHCCCS expects gender in member demographics
     ],
