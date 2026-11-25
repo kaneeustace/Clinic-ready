@@ -122,6 +122,7 @@ const NAV = [
   { group: "Workspace", key: "census", href: "/ehr/census", label: "Census", perm: "patients:read", icon: "M4 20V10M10 20V4M16 20v-7M22 20H2" },
   { group: "Workspace", key: "notes", href: "/ehr/notes", label: "My notes", perm: "clinical:write", icon: "M6 3h9l4 4v14H6zM9 12h7M9 16h5" },
   { group: "Workspace", key: "trt", href: "/ehr/trt", label: "Hormone therapy", perm: "clinical:read", feature: "trt", icon: "M10 2v6L4 20h16L14 8V2M8 2h8M7 15h10" },
+  { group: "Workspace", key: "messages", href: "/ehr/messages", label: "Messages", perm: "patients:write", icon: "M4 5h16v11H8l-4 4zM8 9h8M8 12h5" },
   { group: "Workspace", key: "rx", href: "/ehr/prescriptions", label: "Prescriptions", perm: "clinical:read", icon: "M6 3h7a4 4 0 0 1 0 8H6zM6 11v10M10 11l9 10M19 13l-7 8" },
   { group: "Workspace", key: "scan", href: "/ehr/scan", label: "Note scanner", perm: "clinical:write", icon: "M7 3h7l5 5v13H7zM14 3v5h5M10 13h6M10 17h4M4 8v13" },
   { group: "Operations", key: "requests", href: "/ehr/requests", label: "Intake requests", perm: "requests:manage", icon: "M4 6h16v12H4zM4 7l8 6 8-6" },
@@ -164,6 +165,13 @@ function bottomNav(req, user, active) {
     </nav>`;
 }
 
+/** Small count next to a nav item (unanswered portal messages). */
+function navCount(db, key) {
+  if (key !== "messages") return "";
+  const n = require("./routes/portal").unreadCount(db);
+  return n ? html`<span class="nav-count" aria-label="${n} waiting">${n}</span>` : "";
+}
+
 /** Clinic logo, or the default mark. */
 function brandMark(clinic, cls = "") {
   return clinic.logoUrl
@@ -186,7 +194,7 @@ function page(req, { title, active = "", body, bare = false }) {
               return items.length ? html`
                 <p class="sidebar__label">${g}</p>
                 <ul>${items.map((n) => html`
-                  <li><a href="${n.href}" ${n.key === active ? raw('aria-current="page"') : ""}>${icon(n.icon)}<span>${n.label}</span></a></li>`)}
+                  <li><a href="${n.href}" ${n.key === active ? raw('aria-current="page"') : ""}>${icon(n.icon)}<span>${n.label}</span>${navCount(req.db, n.key)}</a></li>`)}
                 </ul>` : "";
             })}
           </nav>
@@ -237,7 +245,7 @@ function page(req, { title, active = "", body, bare = false }) {
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/ehr/static/ehr.css?v=26">${brandCss(clinic) ? raw(`<style>${brandCss(clinic)}</style>`) : ""}
+  <link rel="stylesheet" href="/ehr/static/ehr.css?v=27">${brandCss(clinic) ? raw(`<style>${brandCss(clinic)}</style>`) : ""}
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
@@ -258,6 +266,7 @@ const CHART_TABS = [
   { key: "billing", label: "Billing", path: "/billing", perm: "billing:read" },
   { key: "loc", label: "Level of care", path: "/level-of-care", perm: "patients:read" },
   { key: "trt", label: "Hormone therapy", path: "/trt", perm: "clinical:read", feature: "trt" },
+  { key: "portal", label: "Portal", path: "/portal", perm: "patients:read" },
   { key: "photos", label: "Pictures", path: "/photos", perm: "patients:read" },
 ];
 /** Optional modules a clinic turns on in Clinic settings (e.g. hormone therapy). */

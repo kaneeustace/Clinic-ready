@@ -887,3 +887,37 @@ fieldset { background: var(--surface-2); border-color: var(--border); }
   .bottomnav__sheet { border-radius: 8px; border: 1px solid var(--border); box-shadow: var(--shadow-lg); }
   .bottomnav__sheet a, .bottomnav__sheet button { border-radius: 4px; }
 }
+
+/* Patient portal (routes/portal.js) and staff messaging */
+.nav-count { display: inline-grid; place-items: center; min-width: 1.35rem; height: 1.35rem; padding: 0 .35rem; margin-left: auto; border-radius: 999px; background: #e5484d; color: #fff; font-size: .72rem; font-weight: 700; }
+.portal { min-height: 100vh; display: flex; flex-direction: column; background: var(--bg); }
+.portal__top { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .8rem max(1rem, calc((100vw - 900px) / 2)); background: var(--navy); color: #fff; }
+.portal__brand { display: flex; align-items: center; gap: .6rem; color: #fff; text-decoration: none; font-weight: 600; line-height: 1.15; }
+.portal__brand:hover { color: #fff; }
+.portal__brand img { width: 34px; height: 34px; border-radius: 6px; object-fit: contain; background: #fff; }
+.portal__brand small { display: block; font-weight: 400; font-size: .78rem; color: var(--navy-text); }
+.portal__top .btn--ghost { color: #fff; border-color: rgba(255,255,255,.35); background: transparent; }
+.portal__nav { display: flex; gap: .25rem; overflow-x: auto; padding: 0 max(1rem, calc((100vw - 900px) / 2)); background: var(--surface); border-bottom: 1px solid var(--border); }
+.portal__nav a { display: inline-flex; align-items: center; gap: .35rem; padding: .8rem .75rem; color: var(--muted); text-decoration: none; border-bottom: 2px solid transparent; white-space: nowrap; }
+.portal__nav a[aria-current="page"] { color: var(--text); border-bottom-color: var(--primary); font-weight: 600; }
+.portal__nav .nav-count { margin-left: 0; }
+.portal__main { width: 100%; max-width: 900px; margin: 0 auto; padding: 1.5rem 1rem 2rem; flex: 1; }
+.portal__narrow { max-width: 460px; margin: 1.5rem auto; }
+.portal__foot { text-align: center; color: var(--muted); font-size: .85rem; padding: 1rem; border-top: 1px solid var(--border); }
+.portal__foot p { margin: .2rem 0; }
+.portal__tiles { display: grid; gap: .75rem; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+.portal__tiles .tile__label { color: var(--primary); font-weight: 500; }
+.portal__appt, .portal__thread { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: .5rem 1rem; }
+.portal__msgs { list-style: none; padding: 0; margin: 0 0 1rem; display: grid; gap: .6rem; }
+.portal__msgs li { max-width: 85%; padding: .7rem .9rem; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); }
+.portal__msgs li p { margin: .25rem 0 0; white-space: pre-wrap; }
+.portal__msgs .from-me { justify-self: end; background: var(--primary-light); border-color: #d2ddfb; }
+.portal__note dt { font-weight: 600; margin-top: .75rem; }
+.portal__note dd { margin: .2rem 0 0; white-space: pre-wrap; }
+.portal-invite { display: grid; grid-template-columns: 1fr auto; gap: 1rem; align-items: start; padding: 1rem; margin: .75rem 0; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface-2); }
+.portal-invite input.mono { width: min(100%, 520px); font-family: ui-monospace, monospace; font-size: .82rem; }
+.portal-invite__qr svg { width: 150px; height: auto; display: block; }
+.portal-staff { display: grid; grid-template-columns: 240px 1fr; gap: 1.25rem; }
+.portal-staff__threads li.is-open { font-weight: 600; }
+@media (max-width: 720px) { .portal-staff, .portal-invite { grid-template-columns: 1fr; } .portal__msgs li { max-width: 100%; } }
+@media print { .portal__top, .portal__nav, .portal__foot { display: none; } }

@@ -117,6 +117,8 @@ function clinicPage(req, res, { v = null, e = {}, logoError = null } = {}, statu
 /** Optional programs a clinic can turn on. Off by default so a behavioral health clinic doesn't see medical tools. */
 function programsCard(req) {
   const on = require("./trt").trtEnabled(req.db);
+  let portalNotes = true;
+  try { const r = req.db.prepare("SELECT portal_notes FROM clinic_settings WHERE id = 1").get(); portalNotes = !r || r.portal_notes !== 0; } catch { portalNotes = true; }
   return html`
     <form class="card stack" id="programs" method="post" action="/ehr/admin/clinic/programs">
       ${csrfField(req)}
@@ -125,6 +127,9 @@ function programsCard(req) {
       <label class="check"><input type="checkbox" name="trt_enabled" value="1" ${on ? raw("checked") : ""}>
         <span><strong>Hormone therapy (testosterone replacement, TRT)</strong><br>
         <span class="hint">Adds a Hormone therapy tab to each chart (regimen, labs, doses, vitals), a client list with labs and doses due, and a Schedule III stock record.</span></span></label>
+      <label class="check"><input type="checkbox" name="portal_notes" value="1" ${portalNotes ? raw("checked") : ""}>
+        <span><strong>Show signed visit notes in the patient portal</strong><br>
+        <span class="hint">Federal information-blocking rules generally expect clients to be able to see their notes. Psychotherapy notes are never shown.</span></span></label>
       <div class="row"><button class="btn btn--sm btn--primary" type="submit">Save programs</button>${on ? html` <a class="btn btn--sm" href="/ehr/trt">Open hormone therapy</a>` : ""}</div>
     </form>`;
 }
@@ -134,6 +139,10 @@ router.post("/admin/clinic/programs", adminOnly, (req, res) => {
   const on = (req.body || {}).trt_enabled === "1";
   const was = trt.trtEnabled(req.db);
   trt.setTrtEnabled(req.db, on);
+  const notes = (req.body || {}).portal_notes === "1" ? 1 : 0;
+  const wasNotes = (req.db.prepare("SELECT portal_notes FROM clinic_settings WHERE id = 1").get() || {}).portal_notes;
+  req.db.prepare("UPDATE clinic_settings SET portal_notes = ? WHERE id = 1").run(notes);
+  if (wasNotes !== notes) audit(req, "update", "clinic_settings", 1, null, `portal notes ${notes ? "on" : "off"}`);
   if (on !== was) audit(req, "update", "clinic_settings", 1, null, `trt ${on ? "on" : "off"}`);
   req.flash("success", on ? "Hormone therapy is on. Each chart now has a Hormone therapy tab." : "Hormone therapy is off. Its records are kept and come back if you turn it on again.");
   res.redirect("/ehr/admin/clinic#programs");

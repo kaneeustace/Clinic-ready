@@ -12,6 +12,13 @@ What ChartReady does today, by area. If something isn't on this list, assume it 
 - Chart tabs: Overview, Appointments, Notes, Treatment plan, Measures, Prescriptions, Billing, Level of care, Hormone therapy (when turned on), Pictures.
 - The chart banner shows the client's photo, current level of care and any safety flags.
 
+## Patient portal
+
+- Clients are invited from their chart (link, QR code, email or text) and confirm their date of birth to set up an account.
+- Appointments with one-tap check-in, secure messages with the care team, and their record: allergies, medications, health concerns, results, treatment plan goals and signed visit notes.
+- Download the record (FHIR) and connect health apps (SMART on FHIR, their own record only).
+- Staff reply from the chart or a Messages inbox. Notifications never include clinical details. Psychotherapy notes are never shown.
+
 ## FHIR API
 
 - FHIR R4 read-only API built to US Core 6.1, SMART App Launch and Bulk Data, the standards behind ONC's (g)(10) API criterion: patients, visits, problems, allergies, medications and prescriptions, results (LOINC), insurance, clinical notes, treatment plans and goals.

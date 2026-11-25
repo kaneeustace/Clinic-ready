@@ -10,7 +10,7 @@ const EHR_PUBLIC = path.resolve(__dirname, "..", "public");
 
 // Feature modules. Each exports `router` (mounted at /ehr, behind login);
 // requests.js also exports `publicRouter` (mounted at /api, no login).
-const MODULES = ["dashboard", "patients", "schedule", "notes", "clinical", "plans", "billing", "requests", "records", "photos", "loc", "trt", "rx", "fhir", "email", "scan", "clinic", "ops", "checkin", "product", "security", "backups", "admin"];
+const MODULES = ["dashboard", "patients", "schedule", "notes", "clinical", "plans", "billing", "requests", "records", "photos", "loc", "trt", "rx", "fhir", "portal", "email", "scan", "clinic", "ops", "checkin", "product", "security", "backups", "admin"];
 
 function securityHeaders(req, res, next) {
   res.set({
@@ -89,6 +89,9 @@ function createApp(db) {
     if (mod.publicRouter) app.use("/api", mod.publicRouter);
   }
 
+  /* ---------- Patient portal (client accounts; own session cookie; see routes/portal.js) ---------- */
+  app.use("/portal", noStore, require("./routes/portal").clientRouter);
+
   /* ---------- Client self check-in (no staff login; see routes/checkin.js) ---------- */
   app.use("/checkin", noStore, require("./routes/checkin").clientRouter);
 
@@ -103,6 +106,8 @@ function createApp(db) {
   app.get("/ehr/sw.js", (req, res) => res.type("application/javascript").set({ "Cache-Control": "no-cache", "Service-Worker-Allowed": "/ehr" }).sendFile(path.join(EHR_PUBLIC, "sw.js")));
   app.use("/ehr", noStore, auth.sessionMiddleware, photos.uploadBodyParser, auth.csrfProtection);
   app.use("/ehr", auth.router);
+  // SMART authorize without a staff sign-in: patient-portal clients get their own consent screen (routes/portal.js).
+  app.get("/ehr/smart/authorize", (req, res, next) => (req.user ? next() : require("./routes/portal").smartEntry(req, res)));
   app.use("/ehr", auth.requireAuth);
   for (const m of MODULES) app.use("/ehr", require(`./routes/${m}`).router);
   app.use("/ehr", (req, res) => notFound(req, res));

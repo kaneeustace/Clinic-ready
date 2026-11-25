@@ -156,11 +156,11 @@ function authenticateClient(req) {
   return { status: 401, error: "invalid_client", desc: "Authenticate with a client secret or a signed client_assertion." };
 }
 
-function issueToken(db, client, scopes, { userId = null, patientId = null } = {}) {
+function issueToken(db, client, scopes, { userId = null, patientId = null, portalAccountId = null } = {}) {
   const token = crypto.randomBytes(32).toString("base64url");
   db.prepare("DELETE FROM fhir_tokens WHERE expires_at < datetime('now')").run();
-  db.prepare("INSERT INTO fhir_tokens (token_hash, client_ref, scopes, expires_at, user_id, patient_id) VALUES (?, ?, ?, ?, ?, ?)")
-    .run(sha256(token), client.id, scopes.join(" "), nowSql(TOKEN_SECONDS), userId, patientId);
+  db.prepare("INSERT INTO fhir_tokens (token_hash, client_ref, scopes, expires_at, user_id, patient_id, portal_account_id) VALUES (?, ?, ?, ?, ?, ?, ?)")
+    .run(sha256(token), client.id, scopes.join(" "), nowSql(TOKEN_SECONDS), userId, patientId, portalAccountId);
   db.prepare("UPDATE fhir_clients SET last_used_at = datetime('now') WHERE id = ?").run(client.id);
   return token;
 }
@@ -199,9 +199,24 @@ function tokenHandler(req, res) {
   if (String(b.redirect_uri || "") !== row.redirect_uri) return err(400, "invalid_grant", "redirect_uri doesn't match the authorization request.");
   const verifier = String(b.code_verifier || "");
   if (!row.code_challenge || !verifier || b64url(crypto.createHash("sha256").update(verifier).digest()) !== row.code_challenge) return err(400, "invalid_grant", "PKCE code_verifier doesn't match.");
+  const scopes = row.scopes.split(" ");
+  if (row.portal_account_id) {
+    // A client connected the app from the patient portal: their own record only.
+    const acct = req.db.prepare("SELECT * FROM portal_accounts WHERE id = ? AND active = 1").get(row.portal_account_id);
+    if (!acct || acct.patient_id !== row.patient_id) return err(400, "invalid_grant", "The portal account is no longer active.");
+    const pscopes = scopes.filter((s) => s.startsWith("patient/") || ["openid", "fhirUser", "launch/patient"].includes(s));
+    const token = issueToken(req.db, client, pscopes, { patientId: acct.patient_id, portalAccountId: acct.id });
+    const out = { access_token: token, token_type: "Bearer", expires_in: TOKEN_SECONDS, scope: pscopes.join(" "), patient: String(acct.patient_id), need_patient_banner: false };
+    if (pscopes.includes("openid")) {
+      const now = Math.floor(Date.now() / 1000);
+      out.id_token = signJwt(req.db, { iss: baseUrl(req), sub: `patient-${acct.patient_id}`, aud: client.client_id, iat: now, exp: now + TOKEN_SECONDS,
+        ...(row.nonce ? { nonce: row.nonce } : {}), ...(pscopes.includes("fhirUser") ? { fhirUser: `${baseUrl(req)}/Patient/${acct.patient_id}` } : {}) });
+    }
+    audit(req, "fhir_token", "fhir_client", client.id, acct.patient_id, `client ${client.client_id} portal`);
+    return res.json(out);
+  }
   const user = req.db.prepare("SELECT * FROM users WHERE id = ?").get(row.user_id);
   if (!user || user.active !== 1) return err(400, "invalid_grant", "The approving user is no longer active.");
-  const scopes = row.scopes.split(" ");
   const token = issueToken(req.db, client, scopes, { userId: user.id, patientId: row.patient_id });
   const out = { access_token: token, token_type: "Bearer", expires_in: TOKEN_SECONDS, scope: row.scopes, need_patient_banner: true };
   if (row.patient_id) out.patient = String(row.patient_id);
@@ -220,13 +235,14 @@ function tokenHandler(req, res) {
 
 function bearer(req, res, next) {
   const m = /^Bearer\s+(\S+)$/i.exec(req.get("authorization") || "");
-  const row = m ? req.db.prepare(`SELECT t.scopes, t.user_id, t.patient_id, c.id, c.client_id, c.name, c.kind, c.include_part2 FROM fhir_tokens t
+  const row = m ? req.db.prepare(`SELECT t.scopes, t.user_id, t.patient_id, t.portal_account_id, c.id, c.client_id, c.name, c.kind, c.include_part2 FROM fhir_tokens t
     JOIN fhir_clients c ON c.id = t.client_ref WHERE t.token_hash = ? AND t.expires_at > datetime('now') AND c.revoked_at IS NULL`).get(sha256(m[1])) : null;
   if (row && row.user_id) {
     const u = req.db.prepare("SELECT * FROM users WHERE id = ?").get(row.user_id);
     if (!u || u.active !== 1) return unauthorized(res);
     row.user = u;
   }
+  if (row && row.portal_account_id && !req.db.prepare("SELECT 1 FROM portal_accounts WHERE id = ? AND active = 1 AND patient_id = ?").get(row.portal_account_id, row.patient_id)) return unauthorized(res);
   if (!row) return unauthorized(res);
   req.fhirClient = row;
   next();
@@ -362,4 +378,4 @@ router.post("/smart/authorize", (req, res) => {
   res.redirect(`${a.redirect}${sep}${new URLSearchParams({ code, state: a.state })}`);
 });
 
-module.exports = { router, mountPublic, bearer, accessFor, userMayRead, baseUrl, parseScope, covers, SCOPE_RE, EXTRA_SCOPES, resetFhirRateLimit, jwks, smartConfiguration, tokenUrl };
+module.exports = { checkAuthorize, router, mountPublic, bearer, accessFor, userMayRead, baseUrl, parseScope, covers, SCOPE_RE, EXTRA_SCOPES, resetFhirRateLimit, jwks, smartConfiguration, tokenUrl };

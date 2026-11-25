@@ -36,6 +36,7 @@ const SECTIONS = [
   ]],
   ["Front desk", [
     ["Check-in on the client's own phone", "A link goes out an hour before the visit. Clients confirm their details, photograph a new insurance card and answer the PHQ-9 and GAD-7."],
+    ["A patient portal", "Clients see appointments, message their care team, read their record and visit notes, and download it. They join by an invitation from their chart."],
     ["A lobby iPad that resets itself", "For clients who'd rather not use their phone. Group sessions show who has arrived."],
   ]],
   ["Programs", [

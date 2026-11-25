@@ -28,6 +28,7 @@ function migrate(db, schema) {
   const REBUILDS = [
     ["notes", "'supportive_housing'", 2, ["CREATE INDEX IF NOT EXISTS idx_notes_patient ON notes(patient_id, created_at);"]],
     ["assessments", "'ASRS'", 1, ["CREATE INDEX IF NOT EXISTS idx_assess_patient ON assessments(patient_id, instrument, administered_on);"]],
+    ["fhir_auth_codes", "portal_account_id", 1, []],
   ];
   // Columns added after first release (ALTER TABLE ADD COLUMN is safe and instant in SQLite).
   const ADD_COLUMNS = {
@@ -40,9 +41,11 @@ function migrate(db, schema) {
     fhir_tokens: [
       ["user_id", "INTEGER REFERENCES users(id)"],   // SMART: the staff user who authorized the app
       ["patient_id", "INTEGER REFERENCES patients(id)"], // SMART: patient in context (patient/ scopes)
+      ["portal_account_id", "INTEGER REFERENCES portal_accounts(id)"], // SMART: the client who connected the app
     ],
     clinic_settings: [
       ["trt_enabled", "INTEGER NOT NULL DEFAULT 0"],         // hormone therapy (TRT) module on/off (routes/trt.js)
+      ["portal_notes", "INTEGER NOT NULL DEFAULT 1"],        // show signed visit notes to clients in the patient portal
     ],
     checkins: [
       ["quick", "INTEGER NOT NULL DEFAULT 0"],              // returning client: one-tap check-in (routes/checkin.js)

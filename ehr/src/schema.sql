@@ -755,7 +755,8 @@ CREATE TABLE IF NOT EXISTS fhir_tokens (
 CREATE TABLE IF NOT EXISTS fhir_auth_codes (
   code_hash TEXT PRIMARY KEY,
   client_ref INTEGER NOT NULL REFERENCES fhir_clients(id),
-  user_id INTEGER NOT NULL REFERENCES users(id),
+  user_id INTEGER REFERENCES users(id),             -- staff member who approved, or
+  portal_account_id INTEGER REFERENCES portal_accounts(id), -- the client who approved (patient portal)
   patient_id INTEGER REFERENCES patients(id),
   scopes TEXT NOT NULL,
   redirect_uri TEXT NOT NULL,
@@ -795,3 +796,51 @@ CREATE TABLE IF NOT EXISTS fhir_export_files (
   ndjson TEXT NOT NULL,
   PRIMARY KEY (export_id, n)
 );
+
+-- ---------------------------------------------------------------------------------------------------------------
+-- Patient portal (routes/portal.js). Clients get an account only by staff invitation. Separate from staff users.
+-- ---------------------------------------------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS portal_accounts (
+  id INTEGER PRIMARY KEY,
+  patient_id INTEGER NOT NULL UNIQUE REFERENCES patients(id),
+  email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  password_hash TEXT NOT NULL,
+  active INTEGER NOT NULL DEFAULT 1,
+  failed_logins INTEGER NOT NULL DEFAULT 0,
+  locked_until TEXT,
+  last_login_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS portal_sessions (
+  id TEXT PRIMARY KEY,                       -- sha256 of the cookie value
+  account_id INTEGER NOT NULL REFERENCES portal_accounts(id) ON DELETE CASCADE,
+  csrf_token TEXT NOT NULL,
+  flash TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  last_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+  expires_at TEXT NOT NULL
+);
+-- One-time links: invitations from staff (7 days) and password resets (1 hour). Stored as sha256.
+CREATE TABLE IF NOT EXISTS portal_tokens (
+  token_hash TEXT PRIMARY KEY,
+  kind TEXT NOT NULL CHECK (kind IN ('invite', 'reset')),
+  patient_id INTEGER NOT NULL REFERENCES patients(id),
+  created_by INTEGER REFERENCES users(id),
+  expires_at TEXT NOT NULL,
+  used_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+-- Secure messages between a client and the clinic. Notifications by email/text never include the message.
+CREATE TABLE IF NOT EXISTS portal_messages (
+  id INTEGER PRIMARY KEY,
+  patient_id INTEGER NOT NULL REFERENCES patients(id),
+  thread_id INTEGER,                         -- id of the first message in the conversation
+  from_patient INTEGER NOT NULL,             -- 1 = client wrote it, 0 = staff
+  staff_user_id INTEGER REFERENCES users(id),
+  subject TEXT NOT NULL,
+  body TEXT NOT NULL,
+  read_at TEXT,                              -- read by the other side
+  handled_at TEXT, handled_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_portal_messages_patient ON portal_messages(patient_id, created_at);
