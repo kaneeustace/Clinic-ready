@@ -96,6 +96,7 @@ const CONTACT_OPTIONS = [
   { value: "text", label: "Text message" }, { value: "email", label: "Email" },
 ];
 const SEVERITY_TONE = { mild: "low", moderate: "moderate", severe: "high" };
+const allergyTypeLabel = (v) => O.labelFor(O.ALLERGY_TYPES, v);
 const UPCOMING_STATUSES = ["scheduled", "checked_in"];
 
 /* ------------------------------------------------------------------ */
@@ -144,6 +145,10 @@ const PATIENT_FIELDS = ["first_name", "last_name", "preferred_name", "dob", "sex
 function validatePatient(db, body, { current = null } = {}) {
   const values = {};
   for (const f of PATIENT_FIELDS) values[f] = str(body[f]);
+  // Dropdowns with an "Other (type it)" box: the saved text is the list value or the typed text.
+  for (const [f, list] of [["gender_identity", O.GENDER_IDENTITIES], ["pronouns", O.PRONOUNS], ["emergency_relation", O.CONTACT_RELATIONSHIPS]]) {
+    values[f] = O.readChoice(body, f, { list, other: true, max: 1000 }) || "";
+  }
   values.ok_voicemail = body.ok_voicemail ? "1" : "";
   values.confirm_duplicate = body.confirm_duplicate ? "1" : "";
   const errors = {};
@@ -303,8 +308,8 @@ function patientForm(req, { values, errors, patient = null, duplicate = null }) 
           ${field(f, "preferred_name", "Preferred name", { attrs: 'maxlength="120"' })}
           ${field(f, "dob", "Date of birth", { type: "date", required: true, attrs: `max="${today()}" min="1900-01-01"` })}
           ${selectField(f, "sex_at_birth", "Sex assigned at birth", SEX_OPTIONS)}
-          ${field(f, "gender_identity", "Gender identity", { attrs: 'maxlength="120"' })}
-          ${field(f, "pronouns", "Pronouns", { hint: "e.g. she/her, he/him, they/them", attrs: 'maxlength="120"' })}
+          ${choiceField(f, "gender_identity", "Gender identity", O.GENDER_IDENTITIES, { placeholder: "Not recorded" })}
+          ${choiceField(f, "pronouns", "Pronouns", O.PRONOUNS, { placeholder: "Not recorded" })}
           ${selectField(f, "gender", "Gender (claims / AHCCCS demographics)", GENDER_OPTIONS)}
           ${selectField(f, "race", "Race", RACE_OPTIONS)}
           ${selectField(f, "ethnicity", "Ethnicity", ETHNICITY_OPTIONS)}
@@ -330,7 +335,7 @@ function patientForm(req, { values, errors, patient = null, duplicate = null }) 
         <legend>Emergency contact</legend>
         <div class="form-grid">
           ${field(f, "emergency_name", "Name", { attrs: 'maxlength="120"' })}
-          ${field(f, "emergency_relation", "Relationship", { attrs: 'maxlength="120"' })}
+          ${choiceField(f, "emergency_relation", "Relationship", O.CONTACT_RELATIONSHIPS)}
           ${field(f, "emergency_phone", "Phone", { type: "tel" })}
         </div>
       </fieldset>
@@ -673,7 +678,7 @@ function renderOverview(req, res, patient, state = null, status = 200) {
               ${field(insF, "member_id", "Member ID", { attrs: 'maxlength="60"' })}
               ${field(insF, "group_number", "Group number", { attrs: 'maxlength="60"' })}
               ${field(insF, "subscriber_name", "Subscriber name", { attrs: 'maxlength="120"' })}
-              ${selectField(insF, "subscriber_relation", "Patient's relationship to subscriber", RELATIONS)}
+              ${choiceField(insF, "subscriber_relation", "Patient's relationship to subscriber", O.SUBSCRIBER_RELATIONSHIPS, { other: false, placeholder: "Not recorded", hint: "X12 relationship code used on claims." })}
               ${field(insF, "copay", "Copay", { hint: "e.g. 25.00", attrs: 'inputmode="decimal"' })}
             </div>
             <div class="form-actions"><button class="btn btn--primary" type="submit">Add policy</button></div>
@@ -689,7 +694,7 @@ function renderOverview(req, res, patient, state = null, status = 200) {
       ${allergies.length ? html`
         <ul class="list-plain">${allergies.map((a) => html`
           <li class="row">
-            <span><strong>${a.substance}</strong>${a.reaction ? html` <span class="muted">· ${a.reaction}</span>` : ""}</span>
+            <span><strong>${a.substance}</strong>${a.allergy_type ? html` <span class="muted small">(${allergyTypeLabel(a.allergy_type)})</span>` : ""}${a.reaction ? html` <span class="muted">· ${a.reaction}</span>` : ""}</span>
             ${a.severity ? badge(SEVERITY_TONE[a.severity], humanize(a.severity)) : ""}
             <span class="spacer"></span>
             ${canAllergy ? html`
@@ -706,7 +711,8 @@ function renderOverview(req, res, patient, state = null, status = 200) {
             ${errorSummary(alF.errors)}
             <div class="form-grid">
               ${field(alF, "substance", "Substance", { required: true, hint: "Medication, food or environmental", attrs: 'maxlength="120"' })}
-              ${field(alF, "reaction", "Reaction", { attrs: 'maxlength="200"' })}
+              ${choiceField(alF, "allergy_type", "Type", O.ALLERGY_TYPES, { other: false, placeholder: "Not specified" })}
+              ${choiceField(alF, "reaction", "Reaction", O.ALLERGY_REACTIONS)}
               ${selectField(alF, "severity", "Severity", [{ value: "", label: "Unknown" }, { value: "mild", label: "Mild" }, { value: "moderate", label: "Moderate" }, { value: "severe", label: "Severe" }])}
             </div>
             <div class="form-actions"><button class="btn btn--primary" type="submit">Add allergy</button></div>
@@ -791,7 +797,7 @@ function renderOverview(req, res, patient, state = null, status = 200) {
           <form method="post" action="/ehr/patients/${pid}/medications" class="stack" novalidate>
             ${csrfField(req)}
             ${errorSummary(medF.errors)}
-            ${medFields(medF)}
+            ${medFields(medF, { prescribers: prescriberOptions(db) })}
             <div class="form-actions"><button class="btn btn--primary" type="submit">Add medication</button></div>
           </form>
         </details>` : ""}
@@ -839,18 +845,20 @@ function renderOverview(req, res, patient, state = null, status = 200) {
     ${recordsCard}`));
 }
 
-const RELATIONS = [
-  { value: "self", label: "Self" }, { value: "spouse", label: "Spouse / partner" }, { value: "child", label: "Child" },
-  { value: "other", label: "Other" },
-];
 
-function medFields(f, { withEnd = false } = {}) {
+/** Prescriber dropdown: active users who can prescribe, labelled "Name, credentials" (the saved text). Outside prescribers use Other. */
+function prescriberOptions(db) {
+  return db.prepare("SELECT name, credentials FROM users WHERE active = 1 AND can_prescribe = 1 ORDER BY name COLLATE NOCASE").all()
+    .map((u) => `${u.name}${u.credentials ? `, ${u.credentials}` : ""}`);
+}
+
+function medFields(f, { withEnd = false, prescribers = [] } = {}) {
   return html`<div class="form-grid">
     ${field(f, "name", "Medication name", { required: true, attrs: 'maxlength="120"' })}
     ${field(f, "dose", "Dose", { hint: "e.g. 50 mg", attrs: 'maxlength="60"' })}
     ${choiceField(f, "route", "Route", O.MED_ROUTES)}
     ${choiceField(f, "frequency", "Frequency", O.MED_FREQUENCIES)}
-    ${field(f, "prescriber", "Prescriber", { hint: "Name, or 'outside provider'", attrs: 'maxlength="120"' })}
+    ${choiceField(f, "prescriber", "Prescriber", prescribers, { hint: "Pick a clinic prescriber, or choose Other and type an outside prescriber's name." })}
     ${field(f, "start_date", "Start date", { type: "date" })}
     ${withEnd ? field(f, "end_date", "End date", { type: "date", hint: "Leave blank while the medication is ongoing." }) : ""}
     ${textareaField(f, "notes", "Notes", { cls: "span-all" })}
@@ -918,7 +926,7 @@ router.post("/patients/:id/insurance", requirePerm("patients:write"), (req, res)
   checkLen(errors, values, "member_id", "Member ID", 60);
   checkLen(errors, values, "group_number", "Group number", 60);
   checkLen(errors, values, "subscriber_name", "Subscriber name", 120);
-  if (values.subscriber_relation && !RELATIONS.some((r) => r.value === values.subscriber_relation)) errors.subscriber_relation = "Choose a relationship from the list.";
+  if (values.subscriber_relation && !O.inList(O.SUBSCRIBER_RELATIONSHIPS, values.subscriber_relation)) errors.subscriber_relation = "Choose a relationship from the list.";
   let copay = null;
   if (values.copay) {
     copay = parseMoney(values.copay);
@@ -954,15 +962,19 @@ router.post("/patients/:id/allergies", allergyPerm, (req, res) => {
   const patient = loadPatient(req, res);
   if (!patient) return;
   const b = req.body || {};
-  const values = { substance: str(b.substance), reaction: str(b.reaction), severity: str(b.severity) };
+  const values = { substance: str(b.substance), severity: str(b.severity) };
+  values.reaction = O.readChoice(b, "reaction", { list: O.ALLERGY_REACTIONS, other: true, max: 1000 }) || "";
+  const type = O.readChoice(b, "allergy_type", { list: O.ALLERGY_TYPES });
+  values.allergy_type = type === undefined ? str(b.allergy_type) : type || "";
   const errors = {};
+  if (type === undefined) errors.allergy_type = "Choose an allergy type from the list.";
   if (!values.substance) errors.substance = "Substance is required.";
   checkLen(errors, values, "substance", "Substance", 120);
   checkLen(errors, values, "reaction", "Reaction", 200);
   if (values.severity && !SEVERITY_TONE[values.severity]) errors.severity = "Choose a severity from the list.";
   if (Object.keys(errors).length) return renderOverview(req, res, patient, { form: "allergy", values, errors }, 400);
-  const r = req.db.prepare("INSERT INTO allergies (patient_id, substance, reaction, severity) VALUES (?, ?, ?, ?)")
-    .run(patient.id, values.substance, orNull(values.reaction), orNull(values.severity));
+  const r = req.db.prepare("INSERT INTO allergies (patient_id, substance, allergy_type, reaction, severity) VALUES (?, ?, ?, ?, ?)")
+    .run(patient.id, values.substance, orNull(values.allergy_type), orNull(values.reaction), orNull(values.severity));
   audit(req, "create", "allergy", Number(r.lastInsertRowid), patient.id);
   req.flash("success", "Allergy added.");
   res.redirect(chartUrl(patient, "#allergies"));
@@ -984,7 +996,8 @@ router.post("/patients/:id/allergies/:aid/deactivate", allergyPerm, (req, res) =
 
 function validateMed(body, { withEnd = false } = {}) {
   const values = {};
-  for (const f of ["name", "dose", "prescriber", "start_date", "end_date", "notes"]) values[f] = str(body[f]);
+  for (const f of ["name", "dose", "start_date", "end_date", "notes"]) values[f] = str(body[f]);
+  values.prescriber = O.readChoice(body, "prescriber", { other: true, max: 1000 }) || "";
   values.route = O.readChoice(body, "route", { list: O.MED_ROUTES, other: true, max: 1000 }) || "";
   values.frequency = O.readChoice(body, "frequency", { list: O.MED_FREQUENCIES, other: true, max: 1000 }) || "";
   const errors = {};
@@ -1029,7 +1042,7 @@ function medEditPage(req, patient, med, f) {
       <form method="post" action="/ehr/patients/${patient.id}/medications/${med.id}/edit" class="stack" novalidate data-dirty-check>
         ${csrfField(req)}
         ${errorSummary(f.errors)}
-        ${medFields(f, { withEnd: true })}
+        ${medFields(f, { withEnd: true, prescribers: prescriberOptions(req.db) })}
         <div class="form-actions">
           <button class="btn btn--primary" type="submit">Save medication</button>
           <a class="btn btn--ghost" href="${chartUrl(patient, "#medications")}">Cancel</a>
