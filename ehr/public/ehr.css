@@ -921,3 +921,8 @@ fieldset { background: var(--surface-2); border-color: var(--border); }
 .portal-staff__threads li.is-open { font-weight: 600; }
 @media (max-width: 720px) { .portal-staff, .portal-invite { grid-template-columns: 1fr; } .portal__msgs li { max-width: 100%; } }
 @media print { .portal__top, .portal__nav, .portal__foot { display: none; } }
+
+/* Dropdown with an "Other" box (src/options.js choice()) */
+.choice { display: flex; flex-wrap: wrap; gap: .4rem; }
+.choice > select { flex: 1 1 14rem; min-width: 0; }
+.choice > .choice-other { flex: 1 1 12rem; min-width: 0; }
