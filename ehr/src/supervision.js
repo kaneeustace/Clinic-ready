@@ -17,15 +17,37 @@ const INDEPENDENT_RE = /\b(LCSW|LPC|LMFT|LISAC|PSYD|PHD|MD|DO|NP|PMHNP|PMHNP-BC|
 /** Note types that never need a co-signature. */
 const NO_COSIGN_TYPES = ["psychotherapy", "roi"];
 
+/*
+ * Credential tokens. A saved credentials string ("LCSW, PhD", or older free text like "L.C.S.W.") is split into tokens;
+ * a token that matches a value in the shared credential list (options.CREDENTIALS, case-insensitive, dots ignored) uses
+ * that entry's flags (independent / prescriber / edu). Anything else falls back to the older regex rules.
+ * options.js is required lazily: it requires views.js, so loading it at the top here could create a require cycle.
+ */
+const normCred = (s) => String(s || "").toUpperCase().replace(/\./g, "").trim();
+let credIndex = null;
+function credentialIndex() {
+  if (!credIndex) credIndex = new Map(require("./options").CREDENTIALS.map((c) => [normCred(c.value), c]));
+  return credIndex;
+}
+/** [{ token, cred }] for a credentials string; cred is the matching options.CREDENTIALS entry or null. */
+function credentialTokens(credentials) {
+  const idx = credentialIndex();
+  return String(credentials || "").split(/[\s,;/()|&+]+/).map(normCred).filter(Boolean).map((token) => ({ token, cred: idx.get(token) || null }));
+}
+/** Does this credentials string include an independent license? */
+function isIndependentCredential(credentials) {
+  return credentialTokens(credentials).some(({ token, cred }) => (cred ? !!cred.independent : INDEPENDENT_RE.test(token)));
+}
+
 function requiresCosign(user) {
   if (!user) return false;
   if (user.requires_cosign === 1) return true;
   if (user.requires_cosign === 0) return false;
   if (!["clinician"].includes(user.role)) return false;
-  return !INDEPENDENT_RE.test(String(user.credentials || ""));
+  return !isIndependentCredential(user.credentials);
 }
 const canSupervise = (user) => !!user && ["clinician", "admin"].includes(user.role) && user.active !== 0 &&
-  (user.role === "admin" || INDEPENDENT_RE.test(String(user.credentials || "")));
+  (user.role === "admin" || isIndependentCredential(user.credentials));
 
 /** May `user` co-sign a note written by `author`? Assigned supervisor, or (when none is assigned) any independent clinician. */
 function mayCosign(user, author) {
@@ -63,5 +85,5 @@ function serviceEndMs(note, appt) {
   return day ? localToMs(day, "23:59") : null;
 }
 
-module.exports = { SIGN_HOURS, COSIGN_HOURS, INDEPENDENT_RE, NO_COSIGN_TYPES, requiresCosign, canSupervise, mayCosign,
+module.exports = { SIGN_HOURS, COSIGN_HOURS, INDEPENDENT_RE, NO_COSIGN_TYPES, credentialTokens, isIndependentCredential, requiresCosign, canSupervise, mayCosign,
   localToMs, utcToMs, msToUtc, serviceEndMs };

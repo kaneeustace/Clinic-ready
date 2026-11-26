@@ -24,6 +24,8 @@ const { can } = require("../permissions");
 const { audit } = require("../audit");
 const { html, raw, page, chartPage, notFound, csrfField, select, getPatient, patientName, today, addDays, fmtDate, fmtTimestamp, humanize } = require("../views");
 const { getClinic } = require("../clinic");
+const O = require("../options");
+const { credentialTokens } = require("../supervision");
 
 const router = express.Router();
 
@@ -40,9 +42,9 @@ const DELIVERY_LABEL = Object.fromEntries(DELIVERY.map((d) => [d.value, d.label]
 
 /* Common prescriptions to start from. The prescriber reviews and edits every field before signing. */
 const TEMPLATES = [
-  { key: "cypionate", group: "Testosterone (TRT)", label: "Testosterone cypionate 200 mg/mL, 10 mL vial", drug: "Testosterone cypionate", strength: "200 mg/mL", dosage_form: "Injectable solution (10 mL multi-dose vial)", route: "Intramuscular", sig: "Inject 0.5 mL (100 mg) into the muscle once weekly.", quantity: 10, quantity_unit: "mL", days_supply: 140, refills: 1, schedule: "III", diagnosis: "E29.1" },
-  { key: "enanthate", group: "Testosterone (TRT)", label: "Testosterone enanthate 200 mg/mL, 5 mL vial", drug: "Testosterone enanthate", strength: "200 mg/mL", dosage_form: "Injectable solution (5 mL multi-dose vial)", route: "Intramuscular", sig: "Inject 0.5 mL (100 mg) into the muscle once weekly.", quantity: 5, quantity_unit: "mL", days_supply: 70, refills: 1, schedule: "III", diagnosis: "E29.1" },
-  { key: "gel", group: "Testosterone (TRT)", label: "Testosterone 1.62% gel, pump", drug: "Testosterone gel", strength: "1.62% (20.25 mg per pump)", dosage_form: "Topical gel, metered pump", route: "Topical", sig: "Apply 4 pumps (81 mg) to the shoulders and upper arms once daily in the morning. Wash hands after.", quantity: 150, quantity_unit: "grams", days_supply: 60, refills: 2, schedule: "III", diagnosis: "E29.1" },
+  { key: "cypionate", group: "Testosterone (TRT)", label: "Testosterone cypionate 200 mg/mL, 10 mL vial", drug: "Testosterone cypionate", strength: "200 mg/mL (10 mL multi-dose vial)", dosage_form: "Injectable solution (vial)", route: "Intramuscular (IM)", sig: "Inject 0.5 mL (100 mg) into the muscle once weekly.", quantity: 10, quantity_unit: "mL", days_supply: 140, refills: 1, schedule: "III", diagnosis: "E29.1" },
+  { key: "enanthate", group: "Testosterone (TRT)", label: "Testosterone enanthate 200 mg/mL, 5 mL vial", drug: "Testosterone enanthate", strength: "200 mg/mL (5 mL multi-dose vial)", dosage_form: "Injectable solution (vial)", route: "Intramuscular (IM)", sig: "Inject 0.5 mL (100 mg) into the muscle once weekly.", quantity: 5, quantity_unit: "mL", days_supply: 70, refills: 1, schedule: "III", diagnosis: "E29.1" },
+  { key: "gel", group: "Testosterone (TRT)", label: "Testosterone 1.62% gel, pump", drug: "Testosterone gel", strength: "1.62% (20.25 mg per pump)", dosage_form: "Topical gel (metered pump)", route: "Topical", sig: "Apply 4 pumps (81 mg) to the shoulders and upper arms once daily in the morning. Wash hands after.", quantity: 150, quantity_unit: "grams", days_supply: 60, refills: 2, schedule: "III", diagnosis: "E29.1" },
   { key: "syringes", group: "Injection supplies", label: "Syringes 3 mL with 23G × 1 in needle", drug: "Syringe with needle", strength: "3 mL, 23G × 1 in", dosage_form: "Supply", route: "", sig: "Use one syringe per injection as directed.", quantity: 12, quantity_unit: "syringes", days_supply: 84, refills: 3, schedule: "", diagnosis: "" },
   { key: "drawing", group: "Injection supplies", label: "Drawing needles 18G × 1.5 in", drug: "Needle (drawing)", strength: "18G × 1.5 in", dosage_form: "Supply", route: "", sig: "Use one needle to draw up each dose.", quantity: 12, quantity_unit: "needles", days_supply: 84, refills: 3, schedule: "", diagnosis: "" },
 ];
@@ -59,8 +61,9 @@ const ICD_RE = /^[A-TV-Z][0-9][0-9A-Z](\.[0-9A-Z]{1,4})?$/;
  * ANP, NP, CNP ...). A user with one of these can prescribe without an administrator switching it on.
  */
 function prescribingCredential(credentials) {
-  return String(credentials || "").toUpperCase().split(/[\s,;/()]+/).filter(Boolean)
-    .some((t) => /^(MD|DO|PA|PA-C|APRN(-[A-Z]+)?|CNP|[A-Z]{0,5}NP(-[A-Z]{1,3})?)$/.test(t));
+  // A credential from the shared list (options.CREDENTIALS, dots ignored) uses its prescriber flag; other text uses the regex.
+  return credentialTokens(credentials)
+    .some(({ token, cred }) => (cred ? !!cred.prescriber : /^(MD|DO|PA|PA-C|APRN(-[A-Z]+)?|CNP|[A-Z]{0,5}NP(-[A-Z]{1,3})?)$/.test(token)));
 }
 
 /** Turn prescribing on for a clinician/admin whose credentials allow it. Returns true if it changed. */
@@ -129,6 +132,9 @@ const FIELDS = ["drug", "strength", "dosage_form", "route", "sig", "quantity", "
 function readRx(b, db, patient, user) {
   const v = {};
   for (const k of FIELDS) v[k] = str(b[k], k === "sig" || k === "pharmacy_note" ? 1000 : 160);
+  // Form and route are dropdowns with "Other (type it)"; older free-text values still post as-is.
+  v.dosage_form = O.readChoice(b, "dosage_form", { list: O.DOSAGE_FORMS, other: true, max: 160 }) || "";
+  v.route = O.readChoice(b, "route", { list: O.MED_ROUTES, other: true, max: 160 }) || "";
   v.daw = b.daw === "1" ? 1 : 0;
   v.pdmp_checked = b.pdmp_checked === "1" ? 1 : 0;
   v.allow_duplicate = b.allow_duplicate === "1" ? 1 : 0;
@@ -247,8 +253,8 @@ function rxTab(req, res, patient, { v = null, e = {} } = {}, status = 200) {
         <div class="form-grid">
           <label class="span-all">Medication or supply<input type="text" name="drug" maxlength="160" value="${v.drug || ""}" required placeholder="e.g. Testosterone cypionate">${errText(e, "drug")}</label>
           <label>Strength<input type="text" name="strength" maxlength="160" value="${v.strength || ""}" placeholder="200 mg/mL"></label>
-          <label>Form<input type="text" name="dosage_form" maxlength="160" value="${v.dosage_form || ""}" placeholder="Injectable solution, 10 mL vial"></label>
-          <label>Route<input type="text" name="route" maxlength="160" value="${v.route || ""}" placeholder="Intramuscular"></label>
+          <label for="dosage_form">Form ${O.choice({ name: "dosage_form", list: O.DOSAGE_FORMS, value: v.dosage_form, other: true, placeholder: "Choose the form…" })}</label>
+          <label for="route">Route ${O.choice({ name: "route", list: O.MED_ROUTES, value: v.route, other: true, placeholder: "Choose the route…" })}</label>
           <label>Schedule ${select("schedule", SCHEDULES, v.schedule)}${errText(e, "schedule")}</label>
           <label class="span-all">Directions (sig)<textarea name="sig" rows="2" maxlength="1000" required>${v.sig || ""}</textarea>${errText(e, "sig")}</label>
           <label>Quantity<input type="number" step="any" min="0" name="quantity" value="${v.quantity || ""}" inputmode="decimal" required>${errText(e, "quantity")}</label>
@@ -464,7 +470,7 @@ function prescriberCard(req, user) {
         <label>DEA number <span class="hint">(for controlled substances)</span><input name="dea_number" value="${u.dea_number || ""}" maxlength="9" autocapitalize="characters" autocomplete="off"></label>
         <label>DEA expires<input type="date" name="dea_expires" value="${u.dea_expires || ""}"></label>
         <label>State license #<input name="license_number" value="${u.license_number || ""}" maxlength="40"></label>
-        <label>License state<input name="license_state" value="${u.license_state || ""}" maxlength="2" autocapitalize="characters"></label>
+        <label for="license_state">License state ${O.stateChoice("license_state", u.license_state || "")}</label>
       </div>
       ${u.can_prescribe && !u.npi ? html`<p class="hint">Add an NPI in the profile above; prescribing needs one.</p>` : ""}
       <div class="form-actions"><button class="btn btn--sm btn--primary" type="submit">Save prescribing</button></div>
@@ -481,7 +487,7 @@ router.post("/admin/users/:id/prescriber", gate((u) => can(u, "admin")), (req, r
   const errs = [];
   if (v.dea_number && !deaValid(v.dea_number)) errs.push("That DEA number isn't valid (2 letters and 7 digits, with a matching check digit).");
   if (v.dea_expires && !isDate(v.dea_expires)) errs.push("Enter a valid DEA expiration date.");
-  if (v.license_state && !/^[A-Z]{2}$/.test(v.license_state)) errs.push("License state is a 2-letter code.");
+  if (v.license_state && !O.STATE_CODES.includes(v.license_state)) errs.push("Choose the license state from the list.");
   if (v.can_prescribe && !["admin", "clinician"].includes(user.role)) errs.push("Only clinicians and administrators can prescribe.");
   if (errs.length) { req.flash("error", errs.join(" ")); return res.redirect(`/ehr/admin/users/${user.id}/edit#prescribing`); }
   db.prepare("UPDATE users SET can_prescribe = ?, dea_number = ?, dea_expires = ?, license_number = ?, license_state = ? WHERE id = ?")

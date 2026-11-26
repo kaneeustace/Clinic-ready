@@ -47,6 +47,28 @@ const EDU_OPTIONS = [
   { value: "HN", label: "HN · bachelor's" }, { value: "HO", label: "HO · master's" }, { value: "HP", label: "HP · doctoral" },
 ];
 const supervision = require("../supervision");
+const O = require("../options");
+
+/*
+ * Credentials: a primary-credential dropdown plus an optional "Additional credential", both from the shared list
+ * (with "Other"). Saved in the existing `credentials` column as "LCSW, PhD", the same format people typed before.
+ */
+function credFields(v) {
+  const parts = String(v.credentials || "").split(",").map((x) => x.trim()).filter(Boolean);
+  const first = parts[0] || "";
+  const second = parts.slice(1).join(", ");
+  return html`
+    <label for="credentials">Credentials ${O.choice({ name: "credentials", list: O.CREDENTIALS, value: first, other: true, placeholder: "None / not licensed" })}</label>
+    <label for="credentials_2">Additional credential <span class="hint">(optional)</span> ${O.choice({ name: "credentials_2", list: O.CREDENTIALS, value: second, other: true, placeholder: "None" })}</label>`;
+}
+function readCreds(body) {
+  const out = [];
+  for (const n of ["credentials", "credentials_2"]) {
+    const c = O.readChoice(body, n, { list: O.CREDENTIALS, other: true, max: 60 });
+    if (c && !out.some((x) => x.toLowerCase() === c.toLowerCase())) out.push(c);
+  }
+  return out.join(", ").slice(0, 120);
+}
 /** Supervisor + co-signature fields for the user forms. */
 function supFields(req, v, selfId = null) {
   const sups = req.db.prepare("SELECT id, name, credentials, role, active FROM users WHERE active = 1 ORDER BY name").all()
@@ -286,7 +308,7 @@ function newUserForm(req, v = {}, errors = []) {
           <label>Full name <input name="name" value="${v.name || ""}" required maxlength="120"></label>
           <label>Email <input type="email" name="email" value="${v.email || ""}" required maxlength="200" autocomplete="off"></label>
           <label for="role">Role ${select("role", ROLE_OPTIONS, v.role || "clinician")}</label>
-          <label>Credentials <span class="hint">e.g. LCSW, MD</span><input name="credentials" value="${v.credentials || ""}" maxlength="60"></label>
+          ${credFields(v)}
           <label>NPI <span class="hint">10 digits, optional</span><input name="npi" value="${v.npi || ""}" inputmode="numeric" pattern="\\d{10}" maxlength="10"></label>
           ${eduField(v)}
           ${supFields(req, v)}
@@ -303,7 +325,7 @@ router.get("/admin/users/new", adminOnly, (req, res) => res.send(newUserForm(req
 router.post("/admin/users", adminOnly, (req, res) => {
   const v = {
     name: str(req.body.name), email: str(req.body.email).toLowerCase(), role: str(req.body.role),
-    credentials: str(req.body.credentials), npi: str(req.body.npi), education_level: str(req.body.education_level).toUpperCase(),
+    credentials: readCreds(req.body), npi: str(req.body.npi), education_level: str(req.body.education_level).toUpperCase(),
   };
   const password = typeof req.body.password === "string" ? req.body.password : "";
   const errors = [];
@@ -343,7 +365,7 @@ function editUserForm(req, user, v = user, errors = []) {
           <div class="form-grid">
             <label>Full name <input name="name" value="${v.name || ""}" required maxlength="120"></label>
             <label for="role">Role ${select("role", ROLE_OPTIONS, v.role)}</label>
-            <label>Credentials <input name="credentials" value="${v.credentials || ""}" maxlength="60"></label>
+            ${credFields(v)}
             <label>NPI <span class="hint">10 digits, optional</span><input name="npi" value="${v.npi || ""}" inputmode="numeric" pattern="\\d{10}" maxlength="10"></label>
             ${eduField(v)}
             ${supFields(req, v, user.id)}
@@ -401,7 +423,7 @@ router.post("/admin/users/:id/edit", adminOnly, (req, res) => {
   const user = loadUserWithLock(req, req.params.id);
   if (!user) return notFound(req, res, "User");
   const v = {
-    name: str(req.body.name), role: str(req.body.role), credentials: str(req.body.credentials),
+    name: str(req.body.name), role: str(req.body.role), credentials: readCreds(req.body),
     npi: str(req.body.npi), active: str(req.body.active) === "0" ? 0 : 1, education_level: str(req.body.education_level).toUpperCase(),
   };
   const errors = [];

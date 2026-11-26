@@ -14,10 +14,21 @@ const { audit } = require("../audit");
 const { html, raw, page, csrfField, brandMark } = require("../views");
 const { COLORS, FIELDS, getClinic } = require("../clinic");
 const { sniff } = require("./photos");
+const O = require("../options");
 
 const router = express.Router();
 const adminOnly = requirePerm("admin");
 const MAX_LOGO = 1024 * 1024;
+
+// Common NUCC taxonomy codes for behavioral health practices. "Other" accepts any valid code.
+const TAXONOMIES = [
+  ["261QM0801X", "Mental Health Clinic"], ["261QR0405X", "Substance Use Disorder Rehabilitation Clinic"],
+  ["324500000X", "Substance Abuse Rehabilitation Facility"], ["320800000X", "Community Based Residential Treatment (Mental Illness)"],
+  ["251S00000X", "Community/Behavioral Health Agency"], ["101YM0800X", "Mental Health Counselor"],
+  ["101YA0400X", "Addiction (Substance Use Disorder) Counselor"], ["1041C0700X", "Clinical Social Worker"],
+  ["106H00000X", "Marriage & Family Therapist"], ["103T00000X", "Psychologist"], ["2084P0800X", "Psychiatry"],
+  ["363LP0808X", "Psychiatric/Mental Health Nurse Practitioner"],
+].map(([value, label]) => ({ value, label: `${value} · ${label}` }));
 
 const LIMITS = { name: 120, tagline: 80, address1: 120, address2: 120, city: 80, state: 2, zip: 10, phone: 30, fax: 30, email: 120, website: 200, npi: 10, tax_id: 10, taxonomy: 10, color: 20 };
 
@@ -25,9 +36,10 @@ function validate(b) {
   const v = {};
   for (const f of FIELDS) v[f] = String(b[f] ?? "").trim().slice(0, LIMITS[f] || 200);
   v.state = v.state.toUpperCase();
+  v.taxonomy = String(O.readChoice(b, "taxonomy", { list: TAXONOMIES, other: true, max: 20 }) || "").toUpperCase();
   const e = {};
   if (!v.name) e.name = "Clinic name is required.";
-  if (v.state && !/^[A-Z]{2}$/.test(v.state)) e.state = "Use the 2-letter state code, e.g. AZ.";
+  if (v.state && !O.STATE_CODES.includes(v.state)) e.state = "Choose the state from the list.";
   if (v.zip && !/^\d{5}(-\d{4})?$/.test(v.zip)) e.zip = "ZIP is 5 digits (or ZIP+4).";
   if (v.npi && !npiValid(v.npi)) e.npi = "That isn't a valid 10-digit NPI (check digit doesn't match).";
   if (v.tax_id && !/^\d{2}-?\d{7}$/.test(v.tax_id)) e.tax_id = "Tax ID (EIN) is 9 digits, e.g. 86-1234567.";
@@ -77,7 +89,7 @@ function clinicPage(req, res, { v = null, e = {}, logoError = null } = {}, statu
             <div class="span-all">${field(v, e, "address1", "Street address")}</div>
             <div class="span-all">${field(v, e, "address2", "Suite / unit")}</div>
             ${field(v, e, "city", "City")}
-            ${field(v, e, "state", "State", { attrs: 'autocapitalize="characters"' })}
+            <label for="state">State ${O.stateChoice("state", v.state || "")}${err(e, "state")}</label>
             ${field(v, e, "zip", "ZIP", { attrs: 'inputmode="numeric"' })}
             ${field(v, e, "phone", "Phone", { type: "tel" })}
             ${field(v, e, "fax", "Fax", { type: "tel" })}
@@ -85,7 +97,7 @@ function clinicPage(req, res, { v = null, e = {}, logoError = null } = {}, statu
             ${field(v, e, "website", "Website", { type: "url" })}
             ${field(v, e, "npi", "Group NPI (Type 2)", { attrs: 'inputmode="numeric"' })}
             ${field(v, e, "tax_id", "Tax ID (EIN)")}
-            ${field(v, e, "taxonomy", "Taxonomy code", { hint: "(optional)" })}
+            <label for="taxonomy">Taxonomy code <span class="hint">(optional)</span> ${O.choice({ name: "taxonomy", list: TAXONOMIES, value: v.taxonomy || "", other: true, placeholder: "Choose a taxonomy…", otherPlaceholder: "10-character code, e.g. 261QM0801X" })}${err(e, "taxonomy")}</label>
           </div>
           <fieldset><legend>Brand color</legend>
             <div class="row">${Object.entries(COLORS).map(([k, col]) => html`

@@ -24,11 +24,19 @@ function unitsFor15(minutes) {
 /** Education-level modifier from credentials (AHCCCS: HM < bachelor, HN bachelor, HO master, HP doctoral). Best guess; staff can override. */
 function educationModifier(user) {
   if (user && user.education_level) return user.education_level;
-  const c = String((user && user.credentials) || "").toUpperCase();
-  if (/\b(PHD|PSYD|EDD|MD|DO|DNP)\b/.test(c)) return "HP";
-  if (/\b(LCSW|LMSW|LPC|LAC|LMFT|LAMFT|LISAC|LASAC|MSW|MA|MS|MED|PMHNP|NP)\b/.test(c)) return "HO";
-  if (/\b(BA|BS|BSW|BHT)\b/.test(c)) return "HN";
-  return null;
+  // Credentials in the shared list (options.CREDENTIALS) use their edu flag; anything else uses the older regexes.
+  // The highest level found wins. Required lazily (supervision -> views; avoids load-order surprises).
+  const RANK = { HM: 1, HN: 2, HO: 3, HP: 4 };
+  let best = null;
+  for (const { token, cred } of require("./supervision").credentialTokens(user && user.credentials)) {
+    let lvl = null;
+    if (cred) lvl = cred.edu || null;
+    else if (/\b(PHD|PSYD|EDD|MD|DO|DNP)\b/.test(token)) lvl = "HP";
+    else if (/\b(LCSW|LMSW|LPC|LAC|LMFT|LAMFT|LISAC|LASAC|MSW|MA|MS|MED|PMHNP|NP)\b/.test(token)) lvl = "HO";
+    else if (/\b(BA|BS|BSW|BHT)\b/.test(token)) lvl = "HN";
+    if (lvl && (!best || RANK[lvl] > RANK[best])) best = lvl;
+  }
+  return best;
 }
 
 module.exports = { profileFor, isAhcccs, isAhcccsPlan, unitsFor15, educationModifier, AHCCCS_PLANS };
