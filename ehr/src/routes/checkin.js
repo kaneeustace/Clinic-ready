@@ -28,6 +28,7 @@ const { audit, raiseAlert } = require("../audit");
 const { html, raw, page, csrfField, notFound, patientName, fmtTime, fmtDate, fmtTimestamp, today, humanize, nowLocal } = require("../views");
 const { INSTRUMENTS, scoreInstrument } = require("./clinical");
 const { getClinic } = require("../clinic");
+const O = require("../options");
 const { sniff } = require("./photos");
 const mailer = require("../mailer");
 const sms = require("../sms");
@@ -246,7 +247,7 @@ function stepPage(req, res, c, { error = null, crisis = false } = {}, status = 2
             <label>New email <input type="email" name="email" maxlength="120" autocomplete="email"></label>
             <label>New street address <input name="address_line1" maxlength="120" autocomplete="address-line1"></label>
             <div class="form-grid"><label>City <input name="city" maxlength="80" autocomplete="address-level2"></label>
-              <label>State <input name="state" maxlength="2" autocomplete="address-level1"></label>
+              <label>State ${O.stateChoice("state", c.state, { defaultState: "AZ", attrs: 'autocomplete="address-level1"' })}</label>
               <label>ZIP <input name="zip" maxlength="10" inputmode="numeric" autocomplete="postal-code"></label></div>
             <button class="btn btn--primary ci__btn" type="submit" name="same" value="0">Save changes</button>
           </div></details>
@@ -260,7 +261,7 @@ function stepPage(req, res, c, { error = null, crisis = false } = {}, status = 2
       <details ${error ? raw("open") : ""}><summary>Yes, I have new insurance</summary>
         <form method="post" action="${base}/insurance" class="stack" data-photo-upload style="margin-top:.75rem">
           <input type="hidden" name="changed" value="1"><input type="hidden" name="image_data" value="">
-          <label>Insurance company <input name="payer" maxlength="120" required></label>
+          <label>Insurance company ${O.choice({ name: "payer", list: O.PAYERS, other: true, required: true, placeholder: "Choose your insurance…", otherPlaceholder: "If not listed, type the name" })}</label>
           <label>Member ID <input name="member_id" maxlength="60" autocomplete="off"></label>
           <label>Photo of the <strong>front</strong> of your card <input type="file" accept="image/*" capture="environment" data-photo-file></label>
           <img class="photo-preview" alt="Preview of your card" hidden data-photo-preview>
@@ -353,7 +354,12 @@ publicRouter.post("/s/:token/:step", (req, res) => {
   if (step === "contact") {
     if (b.same === "1") return advance();
     const ch = {};
-    for (const k of ["phone", "email", "address_line1", "city", "state", "zip"]) { const v = String(b[k] || "").trim().slice(0, 120); if (v) ch[k] = k === "state" ? v.toUpperCase().slice(0, 2) : v; }
+    for (const k of ["phone", "email", "address_line1", "city", "zip"]) { const v = String(b[k] || "").trim().slice(0, 120); if (v) ch[k] = v; }
+    // State is a dropdown pre-set to the state on file (or AZ), so it is always posted: keep it only when it is a real change.
+    const st = String(b.state || "").trim().toUpperCase();
+    if (st && !O.STATE_CODES.includes(st)) return stepPage(req, res, c, { error: "Choose your state from the list." }, 400);
+    const onFile = String(c.state || "").toUpperCase();
+    if (st && st !== onFile && (onFile || st !== "AZ" || ch.address_line1 || ch.city || ch.zip)) ch.state = st;
     if (ch.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(ch.email)) return stepPage(req, res, c, { error: "That email address doesn't look right." }, 400);
     if (!Object.keys(ch).length) return advance();
     audit(sysReq(req), "checkin_contact_changes", "appointment", c.appointment_id, c.patient_id, `fields: ${Object.keys(ch).join(",")}`);
@@ -361,8 +367,8 @@ publicRouter.post("/s/:token/:step", (req, res) => {
   }
   if (step === "insurance") {
     if (b.changed !== "1") return advance(", insurance_changed = 0");
-    const payer = String(b.payer || "").trim().slice(0, 120);
-    if (!payer) return stepPage(req, res, c, { error: "Enter the name of your insurance company." }, 400);
+    const payer = O.readChoice(b, "payer", { list: O.PAYERS, other: true, max: 120 });
+    if (!payer) return stepPage(req, res, c, { error: "Choose your insurance company, or pick Other and type its name." }, 400);
     const img = saveCard(req, c, "insurance_front", b.image_data);
     if (img && img.error) return stepPage(req, res, c, { error: img.error }, 400);
     audit(sysReq(req), "checkin_insurance", "appointment", c.appointment_id, c.patient_id, img ? "changed + card front" : "changed");

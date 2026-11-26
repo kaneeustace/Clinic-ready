@@ -16,6 +16,7 @@ const {
   html, raw, page, chartPage, notFound, csrfField, select, badge, getPatient, patientName,
   today, nowLocal, addDays, fmtDate, money, parseMoney, humanize,
 } = require("../views");
+const O = require("../options");
 
 const router = express.Router();
 const read = requirePerm("billing:read");
@@ -48,12 +49,10 @@ const MAX_MODIFIERS = 4;
 const TIMED_15 = new Set(["H0004", "H2014", "H2017", "H0038", "T1016"]);
 /** Codes not confirmed as covered for AHCCCS; flagged (not blocked) when used. */
 const AHCCCS_UNCONFIRMED = new Set(["90839", "90840", "90785"]);
-const POS_OPTIONS = [
-  { value: "11", label: "11 · Office" }, { value: "12", label: "12 · Home" }, { value: "03", label: "03 · School" },
-  { value: "99", label: "99 · Other" }, { value: "02", label: "02 · Telehealth, other than member's home" },
-  { value: "10", label: "10 · Telehealth, in member's home" },
-];
-const POS_CODES = POS_OPTIONS.map((o) => o.value);
+/** Place-of-service codes (shared list in src/options.js). AHCCCS rejects 02/10 in checkChargeRules. */
+const POS_OPTIONS = O.POS;
+const POS_CODES = O.flat(POS_OPTIONS).map((o) => String(o.value));
+const MODIFIER_SLOTS = [1, 2, 3, 4]; // charge form: one dropdown per modifier position (MAX_MODIFIERS)
 /** Staff who can't bill under their own NPI for AHCCCS (associate-level licenses, BHT, BHPP). */
 const NON_INDEPENDENT_RE = /\b(BHT|BHPP|LAC|LMSW|LAMFT|LASAC|PRSS|CPRSS)\b/i;
 const isNonIndependent = (credentials) => NON_INDEPENDENT_RE.test(String(credentials || ""));
@@ -61,6 +60,16 @@ const FACILITY_NOTE = "Bill under facility NPI; rendering provider in Box 19";
 
 /** Split a stored/entered modifier string ("GT HO", "GT,HO", "GT-HO") into a list. */
 const parseModifiers = (s) => String(s || "").toUpperCase().split(/[\s,;\-]+/).map((x) => x.trim()).filter(Boolean);
+/**
+ * Modifiers from a charge form body: the dropdown slots modifier_1..modifier_4 (in order), plus the older
+ * free-text field (`modifier`, or `modifiers`) still accepted from older forms and API-style posts.
+ * Returns the space-separated string that is validated and stored, as before.
+ */
+function modifiersFromBody(b) {
+  const slots = MODIFIER_SLOTS.map((i) => String((b && b[`modifier_${i}`]) ?? "").trim().slice(0, 10)).filter(Boolean);
+  const text = String((b && (b.modifier ?? b.modifiers)) ?? "").trim().slice(0, 40);
+  return [...slots, ...parseModifiers(text)].join(" ").toUpperCase();
+}
 const modSuffix = (m) => { const l = parseModifiers(m); return l.length ? `-${l.join("-")}` : ""; };
 
 function noteContent(note) {
@@ -145,7 +154,7 @@ function checkChargeRules({ ahcccs, cpt, modifiers, pos, minutes, units, note, a
   if (!ahcccs) return { errors, warnings, units: outUnits };
 
   if (!pos) errors.pos = "AHCCCS: choose the place of service (the member's location).";
-  else if (pos === "02" || pos === "10") errors.pos = "AHCCCS uses member location POS (11 office, 12 home, 03 school, 99 other), not POS 02/10.";
+  else if (pos === "02" || pos === "10") errors.pos = "AHCCCS uses member location POS (e.g. 11 office, 12 home, 03 school, 53 community mental health center, 99 other), not POS 02/10.";
   const has = (m) => modifiers.includes(m);
   const tele = telehealthModality(note, appt);
   if (has("95") || has("93")) errors.modifier = "AHCCCS does not accept modifier 95 or 93; use GT (audio-video) or FQ (audio-only) per the AHCCCS Telehealth Code Set.";
@@ -432,8 +441,8 @@ function feeSchedulePage(req, res, { errors = {}, values = {}, status = 200 } = 
             ${csrfField(req)}
             <input type="hidden" name="active" value="1">
             <div class="form-grid">
-              <label>CPT/HCPCS code <input name="cpt_code" value="${values.cpt_code || ""}" maxlength="5" required pattern="[0-9]{4}[0-9A-Za-z]|[A-Za-z][0-9]{4}"> ${fieldError(errors, "cpt_code")}</label>
-              <label class="span-all">Description <input name="description" value="${values.description || ""}" maxlength="200" required> ${fieldError(errors, "description")}</label>
+              <label>CPT/HCPCS code ${O.choice({ name: "cpt_code", id: "add-cpt", list: O.BH_CODES, value: values.cpt_code || "", other: true, placeholder: "Choose a code", required: true, otherLabel: "Other code (type it)", otherPlaceholder: "e.g. 90837 or H0004" })}<span class="hint">Not listed? Choose “Other code” and type it (CPT like 90837 or HCPCS like H0004).</span> ${fieldError(errors, "cpt_code")}</label>
+              <label class="span-all">Description <input name="description" value="${values.description || ""}" maxlength="200"><span class="hint">Leave blank to use the standard description for a listed code.</span> ${fieldError(errors, "description")}</label>
               <label>Fee ($) <input name="fee" value="${values.fee || ""}" inputmode="decimal" required> ${fieldError(errors, "fee")}</label>
             </div>
             <div class="form-actions"><button class="btn btn--primary" type="submit">Add code</button></div>
@@ -446,12 +455,20 @@ router.get("/billing/fee-schedule", read, (req, res) => feeSchedulePage(req, res
 
 router.post("/billing/fee-schedule", requirePerm("admin"), (req, res) => {
   const db = req.db;
-  const values = { cpt_code: str(req.body.cpt_code, 10).toUpperCase(), description: str(req.body.description), fee: str(req.body.fee, 20) };
+  // The "Add a code" form sends a dropdown (cpt_code, with "Other" + cpt_code_other); the per-row forms send a plain code.
+  const code = str(O.readChoice(req.body, "cpt_code", { list: O.BH_CODES, other: true, max: 10 }) || "", 10).toUpperCase();
+  const values = { cpt_code: code, description: str(req.body.description), fee: str(req.body.fee, 20) };
   const errors = {};
-  if (!CPT_RE.test(values.cpt_code)) errors.cpt_code = "Code must be a CPT code (4 digits then a digit or letter, e.g. 90837) or a HCPCS code (a letter then 4 digits, e.g. H0004).";
+  if (!code) errors.cpt_code = "Choose a code, or choose “Other code” and type it.";
+  else if (!CPT_RE.test(code)) errors.cpt_code = "Code must be a CPT code (4 digits then a digit or letter, e.g. 90837) or a HCPCS code (a letter then 4 digits, e.g. H0004).";
   const fee = parseMoney(values.fee);
   if (fee === null || fee <= 0 || fee > 10000000) errors.fee = "Enter a fee greater than $0.";
   const existing = errors.cpt_code ? null : db.prepare("SELECT * FROM fee_schedule WHERE cpt_code = ?").get(values.cpt_code);
+  // New code picked from the standard list with no description typed: use the list's description.
+  if (!existing && !errors.cpt_code && !values.description) {
+    const listed = O.flat(O.BH_CODES).find((o) => o.value === code);
+    if (listed) values.description = listed.description;
+  }
   if (!existing && !values.description && !errors.cpt_code) errors.description = "Description is required for a new code.";
   if (Object.keys(errors).length) return feeSchedulePage(req, res, { errors, values, status: 400 });
   const active = req.body.active === "1" ? 1 : 0;
@@ -631,6 +648,7 @@ function chargeForm(req, res, patient, { values = {}, errors = {}, appt = null, 
     pos: notePos || (appt && appt.modality === "in_person" ? "11" : ""), minutes: mins != null ? String(mins) : "", note_id: noteId || "",
     bill_to: hasPolicy ? "insurance" : "patient", dx_other: "", ...values,
   };
+  const modSlots = parseModifiers(v.modifier);
   const dxDefault = !values.dx && !values.dx_other; // first render: all active diagnoses checked
   const noteLabel = (n) => `${humanize(n.type)} · ${fmtDate(n.service_date || String(n.signed_at || "").slice(0, 10))} · ${n.status === "signed" ? "signed" : "UNSIGNED draft"}`;
 
@@ -648,7 +666,11 @@ function chargeForm(req, res, patient, { values = {}, errors = {}, appt = null, 
       <div class="form-grid">
         <label>Date of service <input type="date" name="date_of_service" value="${v.date_of_service}" required> ${fieldError(errors, "date_of_service")}</label>
         <label>CPT/HCPCS code ${select("cpt_code", [{ value: "", label: "Choose a code" }, ...fees.map((f) => ({ value: f.cpt_code, label: `${f.cpt_code} · ${f.description} · ${money(f.fee_cents)}${TIMED_15.has(f.cpt_code) ? " / unit" : ""}` }))], v.cpt_code, "required")} ${fieldError(errors, "cpt_code")}</label>
-        <label>Modifiers <input name="modifier" value="${v.modifier}" maxlength="20" placeholder="${ahcccs ? "e.g. GT HO" : "e.g. 95"}"><span class="hint">Up to ${MAX_MODIFIERS}, separated by spaces. ${ahcccs ? "GT audio-video · FQ audio-only · HQ group · HR/HS family · HM/HN/HO/HP education" : "95 = telehealth"}</span> ${fieldError(errors, "modifier")}</label>
+        <fieldset class="span-all modifier-slots">
+          <legend>Modifiers</legend>
+          <div class="row">${MODIFIER_SLOTS.map((i) => html`<label>Modifier ${i} ${O.choice({ name: `modifier_${i}`, id: `modifier_${i}`, list: O.MODIFIERS, value: modSlots[i - 1] || "", placeholder: "—" })}</label>`)}</div>
+          <span class="hint">Up to ${MAX_MODIFIERS}, in billing order.${sugg.modifiers.length && values.modifier === undefined ? ` Pre-filled with the suggested modifiers (${sugg.modifiers.join(" ")}).` : ""} ${ahcccs ? "GT audio-video · FQ audio-only · HQ group · HR/HS family · HM/HN/HO/HP education" : "95 = telehealth"}</span> ${fieldError(errors, "modifier")}
+        </fieldset>
         <label>Place of service ${select("pos", [{ value: "", label: ahcccs ? "Choose (member's location)" : "Not specified" }, ...POS_OPTIONS], v.pos)} ${fieldError(errors, "pos")}</label>
         <label>Minutes <input type="number" name="minutes" min="0" max="1440" value="${v.minutes}"><span class="hint">Documented face-to-face minutes. Per-15-minute codes: 8–22 = 1 unit, 23–37 = 2, 38–52 = 3, 53–67 = 4.</span> ${fieldError(errors, "minutes")}</label>
         <label>Units <input type="number" name="units" min="1" max="96" value="${v.units}"><span class="hint">Calculated from minutes for per-15-minute codes when left blank.</span> ${fieldError(errors, "units")}</label>
@@ -693,7 +715,7 @@ router.post("/patients/:id/charges", write, (req, res) => {
   const b = req.body;
   const dxChecked = [].concat(b.dx || []).map((x) => str(x, 10).toUpperCase()).filter(Boolean);
   const values = {
-    date_of_service: str(b.date_of_service, 10), cpt_code: str(b.cpt_code, 10).toUpperCase(), modifier: str(b.modifier, 40).toUpperCase(),
+    date_of_service: str(b.date_of_service, 10), cpt_code: str(b.cpt_code, 10).toUpperCase(), modifier: modifiersFromBody(b),
     units: str(b.units, 4), fee: str(b.fee, 20), rendering_provider_id: str(b.rendering_provider_id, 10),
     bill_to: str(b.bill_to, 10), dx: dxChecked, dx_other: str(b.dx_other, 200),
     pos: str(b.pos, 2), minutes: str(b.minutes, 5), note_id: str(b.note_id, 12),
@@ -915,6 +937,6 @@ router.get("/patients/:id/superbill", read, (req, res) => {
 });
 
 module.exports = {
-  router, TIMED_15, POS_OPTIONS, suggestModifiers, checkChargeRules, ahcccsBillErrors, parseModifiers, isNonIndependent,
+  router, TIMED_15, POS_OPTIONS, modifiersFromBody, suggestModifiers, checkChargeRules, ahcccsBillErrors, parseModifiers, isNonIndependent,
   telehealthModality, noteServiceType, minutesFor,
 };

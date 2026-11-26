@@ -32,6 +32,7 @@ const express = require("express");
 const { requirePerm, verifyPassword, forbidden } = require("../auth");
 const { can } = require("../permissions");
 const { audit } = require("../audit");
+const O = require("../options");
 const { TYPES } = require("./notes");
 const { INSTRUMENTS } = require("./clinical");
 const { loadTree } = require("./plans");
@@ -559,7 +560,7 @@ function roiProblem(db, patientId, noteId, onDate, { part2 = false } = {}) {
 
 function validateDisclosure(db, patientId, body) {
   const v = {
-    disclosed_on: str(body.disclosed_on, 10), recipient: str(body.recipient, 300), purpose: str(body.purpose, 500),
+    disclosed_on: str(body.disclosed_on, 10), recipient: str(body.recipient, 300), purpose: O.readChoice(body, "purpose", { list: O.DISCLOSURE_PURPOSES, other: true, max: 500 }) || "",
     description: str(body.description, 2000), basis: str(body.basis, 30), method: str(body.method, 30),
     includes_part2: body.includes_part2 === "1" ? 1 : 0, authorization_note_id: str(body.authorization_note_id, 12),
   };
@@ -633,7 +634,7 @@ function disclosuresPage(req, res, patient, { errors = [], values = {}, status =
           <label for="basis">Basis${select("basis", BASES, v.basis)}</label>
           <label for="recipient">Recipient<input id="recipient" name="recipient" maxlength="300" value="${v.recipient || ""}" required
             placeholder="Name / organization, address if known"></label>
-          <label for="purpose">Purpose<input id="purpose" name="purpose" maxlength="500" value="${v.purpose || ""}" required></label>
+          <label for="purpose">Purpose ${O.choice({ name: "purpose", list: O.DISCLOSURE_PURPOSES, value: v.purpose || "", other: true, required: true, placeholder: "Choose a purpose…" })}</label>
           <label for="method">Method${select("method", METHODS.map((m) => ({ value: m, label: m ? humanize(m) : "Select…" })), v.method)}</label>
           <label for="authorization_note_id">Release-of-information consent${select("authorization_note_id",
             [{ value: "", label: "None" }, ...rois.map((n) => ({ value: n.id,

@@ -325,7 +325,7 @@ test("diagnoses: ICD-10 validation, description fill, single primary, resolve an
   // Primary listed first on the overview.
   const chart = await c.get(`/ehr/patients/${pid}`);
   assert.ok(chart.text.indexOf("F41.1") < chart.text.indexOf("F33.1"));
-  assert.match(chart.text, /<datalist id="icd10-common">/);
+  assert.match(chart.text, /<select[^>]*name="icd10_code"/);
 
   assert.equal((await c.post(`/ehr/patients/${pid}/diagnoses/${first.id}/resolve`)).status, 302);
   let d = t.db.prepare("SELECT * FROM diagnoses WHERE id = ?").get(first.id);

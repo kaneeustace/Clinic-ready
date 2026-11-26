@@ -28,6 +28,7 @@ const { audit } = require("../audit");
 const { html, raw, page, chartPage, notFound, getPatient, patientName, today, addDays, fmtDate, fmtTime, fmtDateTime, fmtTimestamp, age, humanize, nowLocal } = require("../views");
 const { getClinic } = require("../clinic");
 const mailer = require("../mailer");
+const O = require("../options");
 const sms = require("../sms");
 
 const clientRouter = express.Router();
@@ -369,10 +370,39 @@ function threadsFor(db, pid) {
 const threadMessages = (db, pid, threadId) => db.prepare(`SELECT m.*, u.name AS staff_name, u.credentials FROM portal_messages m LEFT JOIN users u ON u.id = m.staff_user_id
   WHERE m.patient_id = ? AND m.thread_id = ? ORDER BY m.created_at, m.id`).all(pid, threadId);
 
-function notifyStaff(req, p) {
+/*
+ * Message topics. There is no topic column, so the topic label leads the thread's subject ("Medication or refill
+ * question: …", or just the label when the client left the subject blank); topicOf() reads it back for replies.
+ */
+const FRONTDESK_TOPICS = ["appointment", "cancel", "billing", "records", "technical"];
+function topicOf(subject) {
+  const s = String(subject || "").replace(/^Re: /, "");
+  const t = O.PORTAL_TOPICS.find((x) => s === x.label || s.startsWith(`${x.label}: `));
+  return t ? t.value : null;
+}
+
+/**
+ * Who hears about a new client message (email body is PHI-free: no name, topic or text).
+ *   medication             -> the client's prescribers (prescriptions on file, still able to prescribe) + primary clinician
+ *   appointment / cancel / billing / records / technical -> active front desk staff + primary clinician
+ *   anything else          -> primary clinician
+ * With no primary clinician, administrators are added (as before). Staff who turned off email (digest_email = 0) are skipped.
+ */
+function staffRecipients(db, p, topic) {
+  const pc = p.primary_clinician_id || null;
+  const medication = topic === "medication" ? 1 : 0;
+  const frontdesk = FRONTDESK_TOPICS.includes(topic) ? 1 : 0;
+  return db.prepare(`SELECT id, email FROM users WHERE active = 1 AND COALESCE(digest_email, 1) = 1 AND (
+      id = ?
+      OR (? IS NULL AND role = 'admin')
+      OR (? = 1 AND can_prescribe = 1 AND id IN (SELECT prescriber_id FROM prescriptions WHERE patient_id = ?))
+      OR (? = 1 AND role = 'frontdesk'))`).all(pc, pc, medication, p.id, frontdesk);
+}
+
+function notifyStaff(req, p, topic = null) {
   const cfg = mailer.mailConfig();
   if (!cfg.enabled) return;
-  const to = req.db.prepare(`SELECT email FROM users WHERE active = 1 AND (id = ? OR (? IS NULL AND role = 'admin')) AND COALESCE(digest_email, 1) = 1`).all(p.primary_clinician_id || null, p.primary_clinician_id || null);
+  const to = staffRecipients(req.db, p, topic);
   const link = `${publicBase(req)}/ehr/messages`;
   for (const u of to) mailer.sendMail({ to: u.email, subject: "New patient portal message", text: `A client sent a new message in the patient portal.\n\nRead it in ChartReady: ${link}`,
     html: `<p>A client sent a new message in the patient portal.</p><p><a href="${escHtml(link)}">Read it in ChartReady</a></p>` }).catch((e) => console.error("[portal] staff notice failed:", e.message));
@@ -391,14 +421,15 @@ clientRouter.get("/messages", requirePortal, (req, res) => {
       ${t.unread_by_patient ? html`<span class="badge badge--info">New reply</span>` : ""}</li>`)}</ul>` : html`<p class="muted">No messages yet.</p>`}</section>` }));
 });
 
-const TOPICS = { appointment: "Appointment request", medication: "Medication question", billing: "Billing question", other: "" };
 clientRouter.get("/messages/new", requirePortal, (req, res) => {
-  const topic = TOPICS[req.query.topic] !== undefined ? req.query.topic : "other";
+  // ?topic= (appointment, medication, billing, other, ...) pre-selects the topic.
+  const topic = O.inList(O.PORTAL_TOPICS, req.query.topic) ? String(req.query.topic) : "";
   res.send(layout(req, { title: "New message", active: "/messages", body: html`
     <h1>New message</h1>
     <div class="alert alert--warn" role="note">Not for emergencies. If you're in danger or thinking about harming yourself, call 911 or call or text 988 now.</div>
     <form class="card stack" method="post" action="/portal/messages">${csrf(req)}
-      <label>Subject <input name="subject" maxlength="120" required value="${TOPICS[topic]}"></label>
+      <label for="topic">Topic ${O.choice({ name: "topic", list: O.PORTAL_TOPICS, value: topic, required: true, placeholder: "What is this about?" })}</label>
+      <label>Subject <span class="hint">(optional)</span><input name="subject" maxlength="80" value=""></label>
       <label>Message <textarea name="body" rows="7" maxlength="4000" required>${topic === "appointment" ? "Days and times that work for me: " : ""}</textarea></label>
       <div class="row"><button class="btn btn--primary" type="submit">Send</button><a class="btn btn--ghost" href="/portal/messages">Cancel</a></div>
     </form>` }));
@@ -406,14 +437,19 @@ clientRouter.get("/messages/new", requirePortal, (req, res) => {
 
 clientRouter.post("/messages", requirePortal, (req, res) => {
   const { patient: p } = req.portal;
-  const subject = str((req.body || {}).subject, 120), body = str((req.body || {}).body, 4000);
-  if (!subject || !body) { req.pflash("error", "Add a subject and a message."); return res.redirect("/portal/messages/new"); }
+  const b = req.body || {};
+  const topic = O.readChoice(b, "topic", { list: O.PORTAL_TOPICS });
+  const typed = str(b.subject, 120), body = str(b.body, 4000);
+  if (!topic) { req.pflash("error", "Choose what your message is about."); return res.redirect("/portal/messages/new"); }
+  if (!body) { req.pflash("error", "Write your message."); return res.redirect(`/portal/messages/new?topic=${encodeURIComponent(topic)}`); }
+  const label = O.labelFor(O.PORTAL_TOPICS, topic);
+  const subject = (typed ? `${label}: ${typed}` : label).slice(0, 120);
   const recent = req.db.prepare("SELECT COUNT(*) AS n FROM portal_messages WHERE patient_id = ? AND from_patient = 1 AND created_at > datetime('now', '-1 hour')").get(p.id).n;
   if (recent >= 10) { req.pflash("error", "You've sent a lot of messages in the last hour. Please wait, or call the clinic."); return res.redirect("/portal/messages"); }
   const id = Number(req.db.prepare("INSERT INTO portal_messages (patient_id, from_patient, subject, body) VALUES (?, 1, ?, ?)").run(p.id, subject, body).lastInsertRowid);
   req.db.prepare("UPDATE portal_messages SET thread_id = ? WHERE id = ?").run(id, id);
-  audit(sys(req), "portal_message_sent", "portal_message", id, p.id);
-  notifyStaff(req, p);
+  audit(sys(req), "portal_message_sent", "portal_message", id, p.id, `topic=${topic}`);
+  notifyStaff(req, p, topic);
   req.pflash("success", "Message sent. Your care team will reply here.");
   res.redirect(`/portal/messages/${id}`);
 });
@@ -444,7 +480,7 @@ clientRouter.post("/messages/:id/reply", requirePortal, (req, res) => {
   if (!body) { req.pflash("error", "Write a reply first."); return res.redirect(`/portal/messages/${first.id}`); }
   const id = Number(req.db.prepare("INSERT INTO portal_messages (patient_id, thread_id, from_patient, subject, body) VALUES (?, ?, 1, ?, ?)").run(p.id, first.id, `Re: ${first.subject}`.slice(0, 120), body).lastInsertRowid);
   audit(sys(req), "portal_message_sent", "portal_message", id, p.id);
-  notifyStaff(req, p);
+  notifyStaff(req, p, topicOf(first.subject));
   req.pflash("success", "Reply sent.");
   res.redirect(`/portal/messages/${first.id}`);
 });

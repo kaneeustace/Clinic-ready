@@ -65,7 +65,8 @@ test("AHCCCS detection via AHCCCS ID only (an AHCCCS plan alone does not turn it
   const ov = await c.get(`/ehr/patients/${p.id}`);
   assert.match(ov.text, /<span class="pill"[^>]*>AHCCCS<\/span>/);
   assert.match(ov.text, /C11223344/);
-  assert.match(ov.text, /list="payer-suggestions"/);
+  assert.match(ov.text, /<select[^>]*name="payer_name"/);
+  assert.match(ov.text, /name="payer_name_other"/);
   assert.match(ov.text, /Molina Complete Care of Arizona/);
   const ov2 = await c.get(`/ehr/patients/${commercial}`);
   assert.doesNotMatch(ov2.text, /data-ahcccs/);

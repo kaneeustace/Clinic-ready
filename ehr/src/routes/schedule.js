@@ -16,6 +16,7 @@ const {
 const router = express.Router();
 
 const { apptColors, colorFor } = require("../appt-colors");
+const O = require("../options");
 const TYPES = ["intake", "therapy", "psychiatry_eval", "med_management", "family", "group", "consult"];
 const MODALITIES = ["in_person", "telehealth"];
 const STATUSES = ["scheduled", "checked_in", "completed", "no_show", "cancelled", "late_cancel"];
@@ -502,8 +503,8 @@ function statusForm(req, a) {
           <label for="status">New status
             ${select("status", opts, "")}
           </label>
-          <label for="reason" class="span-all">Cancellation reason <span class="hint">Required when cancelling. Saved in the scheduling notes.</span>
-            <textarea name="reason" id="reason" maxlength="500"></textarea>
+          <label for="reason" class="span-all">Cancellation reason <span class="hint">Required when cancelling or late-cancelling. Saved in the scheduling notes.</span>
+            ${O.choice({ name: "reason", list: O.CANCEL_REASONS, other: true, placeholder: "Choose a reason…" })}
           </label>
         </div>
         ${pastOk ? "" : html`<p class="hint">Completed and no-show can be recorded on or after the appointment date.</p>`}
@@ -627,7 +628,8 @@ router.post("/appointments/:id/status", requirePerm("schedule:write"), (req, res
   if (!a) return notFound(req, res, "Appointment");
   const back = safeReturn(req.body.return_to, `/ehr/appointments/${a.id}`);
   const status = String(req.body.status || "");
-  const reason = str(req.body.reason, 500);
+  // Dropdown (with "Other (type it)"); a plain-text `reason` from older forms or scripts is still accepted as-is.
+  const reason = O.readChoice(req.body, "reason", { list: O.CANCEL_REASONS, other: true, max: 500 });
   const fail = (msg) => { req.flash("error", msg); return res.redirect(back); };
 
   if (!STATUSES.includes(status)) return fail("Choose a valid status.");

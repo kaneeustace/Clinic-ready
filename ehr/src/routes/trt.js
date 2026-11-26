@@ -30,6 +30,7 @@ const express = require("express");
 const { forbidden } = require("../auth");
 const { can } = require("../permissions");
 const { audit } = require("../audit");
+const O = require("../options");
 const { html, raw, page, chartPage, notFound, csrfField, select, getPatient, patientName, today, addDays, fmtDate, humanize } = require("../views");
 
 const router = express.Router();
@@ -662,7 +663,7 @@ function inventoryPage(req, res, { form = null, v = {}, e = {} } = {}, status = 
   const people = staff(db).filter((p) => p.id !== u.id);
   const fe = (n) => (form === n ? e : {});
   const fv = (n, d) => (form === n ? v : d);
-  const rv = fv("receive", { received_on: t, product: "Testosterone cypionate 200 mg/mL", concentration_mg_ml: "200" });
+  const rv = fv("receive", { received_on: t, product: "", concentration_mg_ml: "" });
   const wv = fv("waste", {});
   const av = fv("adjust", {});
   const lotOptions = (sel) => select("lot_id", opt(open.map((l) => ({ value: l.id, label: `${l.product} · lot ${l.lot_number} · ${ml(l.on_hand)} on hand` }))), sel);
@@ -695,11 +696,11 @@ function inventoryPage(req, res, { form = null, v = {}, e = {} } = {}, status = 
       <form class="card stack" method="post" action="/ehr/trt/inventory/lots" novalidate>
         ${csrfField(req)}<h2>Receive a lot</h2>
         <div class="form-grid">
-          <label class="span-all">Product<input type="text" name="product" maxlength="120" value="${rv.product || ""}" required>${errText(fe("receive"), "product")}</label>
+          <label class="span-all" for="product">Product ${O.choice({ name: "product", list: O.TRT_PRODUCTS, value: rv.product || "", other: true, required: true, placeholder: "Choose a product…" })}${errText(fe("receive"), "product")}</label>
           <label>NDC <span class="hint">(optional)</span><input type="text" name="ndc" maxlength="20" value="${rv.ndc || ""}"></label>
           <label>Lot number<input type="text" name="lot_number" maxlength="60" value="${rv.lot_number || ""}" required>${errText(fe("receive"), "lot_number")}</label>
           <label>Expiration<input type="date" name="expiration" value="${rv.expiration || ""}" required>${errText(fe("receive"), "expiration")}</label>
-          <label>Strength (mg/mL)<input type="number" step="any" min="0" name="concentration_mg_ml" value="${rv.concentration_mg_ml || ""}" required>${errText(fe("receive"), "concentration_mg_ml")}</label>
+          <label>Strength (mg/mL)<input type="number" step="any" min="0" name="concentration_mg_ml" value="${rv.concentration_mg_ml || ""}"><span class="hint">Leave blank to use the listed product's strength.</span>${errText(fe("receive"), "concentration_mg_ml")}</label>
           <label>Amount received (mL)<input type="number" step="any" min="0" name="quantity_ml" value="${rv.quantity_ml || ""}" required><span class="hint">e.g. 10 vials × 1 mL = 10</span>${errText(fe("receive"), "quantity_ml")}</label>
           <label>Date received<input type="date" name="received_on" value="${rv.received_on || ""}" max="${t}">${errText(fe("receive"), "received_on")}</label>
           <label>Supplier<input type="text" name="supplier" maxlength="120" value="${rv.supplier || ""}"></label>
@@ -715,7 +716,7 @@ function inventoryPage(req, res, { form = null, v = {}, e = {} } = {}, status = 
             <label class="span-all">Lot ${lotOptions(wv.lot_id)}${errText(fe("waste"), "lot_id")}</label>
             <label>Amount (mL)<input type="number" step="any" min="0" name="quantity_ml" value="${wv.quantity_ml || ""}">${errText(fe("waste"), "quantity_ml")}</label>
             <label>Witness ${select("witness_id", opt(people.map((p) => ({ value: p.id, label: staffLabel(p) }))), wv.witness_id)}${errText(fe("waste"), "witness_id")}</label>
-            <label class="span-all">Reason<input type="text" name="reason" maxlength="300" value="${wv.reason || ""}" placeholder="e.g. expired; vial dropped">${errText(fe("waste"), "reason")}</label>
+            <label class="span-all" for="waste_reason">Reason ${O.choice({ name: "reason", id: "waste_reason", list: O.TRT_WASTE_REASONS, value: wv.reason || "", other: true, required: true, placeholder: "Choose a reason…" })}${errText(fe("waste"), "reason")}</label>
           </div>
           <div class="form-actions"><button class="btn" type="submit">Record waste</button></div>
         </form>
@@ -726,7 +727,7 @@ function inventoryPage(req, res, { form = null, v = {}, e = {} } = {}, status = 
           <div class="form-grid">
             <label class="span-all">Lot ${lotOptions(av.lot_id)}${errText(fe("adjust"), "lot_id")}</label>
             <label>Change (mL)<input type="number" step="any" name="quantity_ml" value="${av.quantity_ml || ""}">${errText(fe("adjust"), "quantity_ml")}</label>
-            <label class="span-all">Reason<input type="text" name="reason" maxlength="300" value="${av.reason || ""}">${errText(fe("adjust"), "reason")}</label>
+            <label class="span-all" for="adjust_reason">Reason ${O.choice({ name: "reason", id: "adjust_reason", list: O.TRT_ADJUST_REASONS, value: av.reason || "", other: true, required: true, placeholder: "Choose a reason…" })}${errText(fe("adjust"), "reason")}</label>
           </div>
           <div class="form-actions"><button class="btn" type="submit">Record correction</button></div>
         </form>` : ""}
@@ -752,7 +753,11 @@ router.get("/trt/inventory", requireEnabled, gate(canView), (req, res) => invent
 router.post("/trt/inventory/lots", requireEnabled, gate(canWrite), (req, res) => {
   const b = req.body || {};
   const v = {};
-  for (const k of ["product", "ndc", "lot_number", "expiration", "concentration_mg_ml", "quantity_ml", "received_on", "supplier", "invoice"]) v[k] = str(b[k], 120);
+  for (const k of ["ndc", "lot_number", "expiration", "concentration_mg_ml", "quantity_ml", "received_on", "supplier", "invoice"]) v[k] = str(b[k], 120);
+  v.product = O.readChoice(b, "product", { list: O.TRT_PRODUCTS, other: true, max: 120 }) || "";
+  // A listed product carries its strength: fill a blank strength from it.
+  const listed = O.TRT_PRODUCTS.find((p) => p.value === v.product);
+  if (listed && !v.concentration_mg_ml) v.concentration_mg_ml = String(listed.mgml);
   const e = {};
   if (!v.product) e.product = "Enter the product.";
   if (!v.lot_number) e.lot_number = "Enter the lot number.";
@@ -782,7 +787,8 @@ router.post("/trt/inventory/lots", requireEnabled, gate(canWrite), (req, res) =>
 router.post("/trt/inventory/waste", requireEnabled, gate(canWrite), (req, res) => {
   const db = req.db;
   const b = req.body || {};
-  const v = { lot_id: str(b.lot_id, 10), quantity_ml: str(b.quantity_ml, 12), witness_id: str(b.witness_id, 10), reason: str(b.reason, 300) };
+  const v = { lot_id: str(b.lot_id, 10), quantity_ml: str(b.quantity_ml, 12), witness_id: str(b.witness_id, 10),
+    reason: O.readChoice(b, "reason", { list: O.TRT_WASTE_REASONS, other: true, max: 300 }) || "" };
   const e = {};
   const lot = v.lot_id ? db.prepare("SELECT * FROM trt_lots WHERE id = ? AND closed_at IS NULL").get(Number(v.lot_id)) : null;
   if (!lot) e.lot_id = "Choose an open lot.";
@@ -804,7 +810,8 @@ router.post("/trt/inventory/waste", requireEnabled, gate(canWrite), (req, res) =
 router.post("/trt/inventory/adjust", requireEnabled, gate((u) => can(u, "admin")), (req, res) => {
   const db = req.db;
   const b = req.body || {};
-  const v = { lot_id: str(b.lot_id, 10), quantity_ml: str(b.quantity_ml, 12), reason: str(b.reason, 300) };
+  const v = { lot_id: str(b.lot_id, 10), quantity_ml: str(b.quantity_ml, 12),
+    reason: O.readChoice(b, "reason", { list: O.TRT_ADJUST_REASONS, other: true, max: 300 }) || "" };
   const e = {};
   const lot = v.lot_id ? db.prepare("SELECT * FROM trt_lots WHERE id = ? AND closed_at IS NULL").get(Number(v.lot_id)) : null;
   if (!lot) e.lot_id = "Choose an open lot.";

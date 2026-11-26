@@ -139,7 +139,7 @@ test("my record: allergies, medications, results, notes (never psychotherapy), d
 
 test("messages: client writes, staff inbox shows it, staff replies, client is notified without the text", async () => {
   const b = await signedIn();
-  let r = await b.post("/portal/messages", { subject: "Question about my plan", body: "Can we talk about my goals next time?" });
+  let r = await b.post("/portal/messages", { topic: "clinician", subject: "Question about my plan", body: "Can we talk about my goals next time?" });
   assert.equal(r.status, 302);
   const threadId = Number(r.location.split("/").pop());
   const th = await t.login("therapist");

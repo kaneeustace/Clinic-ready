@@ -9,6 +9,7 @@ const { can } = require("../permissions");
 const { audit } = require("../audit");
 const { tx, nextMrn } = require("../db");
 const { isAhcccs, isAhcccsPlan } = require("../payers");
+const O = require("../options");
 const {
   html, raw, page, chartPage, notFound, csrfField, badge, getPatient, patientName,
   today, nowLocal, fmtDate, fmtDateTime, age, money, parseMoney, humanize,
@@ -87,15 +88,9 @@ const LANGUAGE_OPTIONS = [
   { value: "vi", label: "Vietnamese" }, { value: "zh", label: "Chinese" }, { value: "ar", label: "Arabic" }, { value: "tl", label: "Tagalog" },
   { value: "ase", label: "American Sign Language" }, { value: "other", label: "Other" },
 ];
-/*
- * Payer-name suggestions for the insurance form. AHCCCS health plans change with contract cycles:
- * VERIFY this list against the current AHCCCS contracts (and keep src/payers.js AHCCCS_PLANS in step).
- */
-const PAYER_SUGGESTIONS = [
-  "Mercy Care", "Banner University Health Plans", "Arizona Complete Health – Complete Care Plan",
-  "UnitedHealthcare Community Plan", "Care1st", "Health Choice / AzCH", "Molina Complete Care of Arizona",
-  "AHCCCS Fee-for-Service", "AIHP – American Indian Health Program", "DCS CHP",
-];
+// Payer names for the insurance form come from O.PAYERS (src/options.js; AHCCCS plans there match src/payers.js).
+// ICD-10 dropdown: "CODE · description", value = code.
+const ICD10_CHOICES = ICD10_COMMON.map(([c, d]) => ({ value: c, label: `${c} · ${d}` }));
 const CONTACT_OPTIONS = [
   { value: "", label: "No preference" }, { value: "phone", label: "Phone call" },
   { value: "text", label: "Text message" }, { value: "email", label: "Email" },
@@ -184,7 +179,7 @@ function validatePatient(db, body, { current = null } = {}) {
 
   if (values.email && (!EMAIL_RE.test(values.email) || values.email.length > 200)) errors.email = "Enter a valid email address.";
   values.state = values.state.toUpperCase();
-  if (values.state && !/^[A-Z]{2}$/.test(values.state)) errors.state = "Use the 2-letter state code, e.g. NY.";
+  if (values.state && !O.STATE_CODES.includes(values.state)) errors.state = "Choose a state from the list (2-letter state code, e.g. NY).";
   if (values.zip && !/^\d{5}(-\d{4})?$/.test(values.zip)) errors.zip = "Enter a 5-digit ZIP code (or ZIP+4).";
   if (values.preferred_contact && !CONTACT_OPTIONS.some((o) => o.value === values.preferred_contact)) {
     errors.preferred_contact = "Choose an option from the list.";
@@ -255,6 +250,23 @@ function selectField(f, name, label, options, { required = false, hint, cls = ""
       ${options.map((o) => html`<option value="${o.value}" ${String(o.value) === sel ? raw("selected") : ""}>${o.label}</option>`)}
     </select>${fieldExtras(id, hint, err)}</label>`;
 }
+/** <label> wrapping an O.choice dropdown (with optional "Other" text box). */
+function choiceField(f, name, label, list, { required = false, hint, cls = "", other = true, placeholder } = {}) {
+  const id = `${f.prefix || ""}${name}`;
+  const err = f.errors[name];
+  const ids = [hint ? `${id}-hint` : "", err ? `${id}-err` : ""].filter(Boolean).join(" ");
+  const attrs = `${ids ? `aria-describedby="${ids}"` : ""}${err ? ' aria-invalid="true"' : ""}`;
+  return html`<label ${cls ? html`class="${cls}"` : ""}>${label}${reqMark(required)}
+    ${O.choice({ name, list, value: f.values[name] ?? "", other, id, required, attrs, ...(placeholder ? { placeholder } : {}) })}
+    ${fieldExtras(id, hint, err)}</label>`;
+}
+function stateField(f, name, label) {
+  const id = `${f.prefix || ""}${name}`;
+  const err = f.errors[name];
+  return html`<label>${label}
+    ${O.stateChoice(name, f.values[name] ?? "", { id, attrs: err ? `aria-describedby="${id}-err" aria-invalid="true"` : "" })}
+    ${fieldExtras(id, null, err)}</label>`;
+}
 function textareaField(f, name, label, { hint, cls = "" } = {}) {
   const id = `${f.prefix || ""}${name}`;
   const err = f.errors[name];
@@ -310,7 +322,7 @@ function patientForm(req, { values, errors, patient = null, duplicate = null }) 
           ${field(f, "address_line1", "Street address", { cls: "span-all", attrs: 'maxlength="120"' })}
           ${field(f, "address_line2", "Apt, suite, unit", { attrs: 'maxlength="120"' })}
           ${field(f, "city", "City", { attrs: 'maxlength="120"' })}
-          ${field(f, "state", "State", { hint: "2-letter code", attrs: 'maxlength="2"' })}
+          ${stateField(f, "state", "State")}
           ${field(f, "zip", "ZIP code", { attrs: 'inputmode="numeric" maxlength="10"' })}
         </div>
       </fieldset>
@@ -657,8 +669,7 @@ function renderOverview(req, res, patient, state = null, status = 200) {
             ${errorSummary(insF.errors)}
             <div class="form-grid">
               ${selectField(insF, "priority", "Priority", [{ value: "primary", label: "Primary" }, { value: "secondary", label: "Secondary" }], { required: true })}
-              ${field(insF, "payer_name", "Payer name", { required: true, hint: "Type or pick; AHCCCS health plans are listed.", attrs: 'maxlength="120" list="payer-suggestions" autocomplete="off"' })}
-              <datalist id="payer-suggestions">${PAYER_SUGGESTIONS.map((n) => html`<option value="${n}"></option>`)}</datalist>
+              ${choiceField(insF, "payer_name", "Payer name", O.PAYERS, { required: true, hint: "Pick from the list (AHCCCS health plans are listed), or choose Other and type it." })}
               ${field(insF, "member_id", "Member ID", { attrs: 'maxlength="60"' })}
               ${field(insF, "group_number", "Group number", { attrs: 'maxlength="60"' })}
               ${field(insF, "subscriber_name", "Subscriber name", { attrs: 'maxlength="120"' })}
@@ -739,12 +750,11 @@ function renderOverview(req, res, patient, state = null, status = 200) {
             ${csrfField(req)}
             ${errorSummary(dxF.errors)}
             <div class="form-grid">
-              ${field(dxF, "icd10_code", "ICD-10 code", { required: true, hint: "e.g. F41.1. Start typing to see common codes.", attrs: 'list="icd10-common" autocomplete="off" maxlength="8"' })}
+              ${choiceField(dxF, "icd10_code", "ICD-10 code", ICD10_CHOICES, { required: true, hint: "Pick a common code, or choose Other and type the code, e.g. F41.1." })}
               ${field(dxF, "description", "Description", { hint: "Left blank, filled from the common code list when possible.", attrs: 'maxlength="200"' })}
               ${field(dxF, "onset_date", "Onset date", { type: "date", attrs: `max="${today()}"` })}
               <label class="check"><input type="checkbox" name="is_primary" value="1" ${dxF.values.is_primary ? raw("checked") : ""}> Primary diagnosis</label>
             </div>
-            <datalist id="icd10-common">${ICD10_COMMON.map(([c, d]) => html`<option value="${c}">${c} ${d}</option>`)}</datalist>
             <div class="form-actions"><button class="btn btn--primary" type="submit">Add diagnosis</button></div>
           </form>
         </details>` : ""}
@@ -838,8 +848,8 @@ function medFields(f, { withEnd = false } = {}) {
   return html`<div class="form-grid">
     ${field(f, "name", "Medication name", { required: true, attrs: 'maxlength="120"' })}
     ${field(f, "dose", "Dose", { hint: "e.g. 50 mg", attrs: 'maxlength="60"' })}
-    ${field(f, "route", "Route", { hint: "e.g. by mouth", attrs: 'maxlength="60"' })}
-    ${field(f, "frequency", "Frequency", { hint: "e.g. once daily", attrs: 'maxlength="60"' })}
+    ${choiceField(f, "route", "Route", O.MED_ROUTES)}
+    ${choiceField(f, "frequency", "Frequency", O.MED_FREQUENCIES)}
     ${field(f, "prescriber", "Prescriber", { hint: "Name, or 'outside provider'", attrs: 'maxlength="120"' })}
     ${field(f, "start_date", "Start date", { type: "date" })}
     ${withEnd ? field(f, "end_date", "End date", { type: "date", hint: "Leave blank while the medication is ongoing." }) : ""}
@@ -899,7 +909,8 @@ router.post("/patients/:id/insurance", requirePerm("patients:write"), (req, res)
   if (!patient) return;
   const b = req.body || {};
   const values = {};
-  for (const f of ["priority", "payer_name", "member_id", "group_number", "subscriber_name", "subscriber_relation", "copay"]) values[f] = str(b[f]);
+  for (const f of ["priority", "member_id", "group_number", "subscriber_name", "subscriber_relation", "copay"]) values[f] = str(b[f]);
+  values.payer_name = O.readChoice(b, "payer_name", { list: O.PAYERS, other: true, max: 1000 }) || "";
   const errors = {};
   if (!["primary", "secondary"].includes(values.priority)) errors.priority = "Choose primary or secondary.";
   if (!values.payer_name) errors.payer_name = "Payer name is required.";
@@ -973,7 +984,9 @@ router.post("/patients/:id/allergies/:aid/deactivate", allergyPerm, (req, res) =
 
 function validateMed(body, { withEnd = false } = {}) {
   const values = {};
-  for (const f of ["name", "dose", "route", "frequency", "prescriber", "start_date", "end_date", "notes"]) values[f] = str(body[f]);
+  for (const f of ["name", "dose", "prescriber", "start_date", "end_date", "notes"]) values[f] = str(body[f]);
+  values.route = O.readChoice(body, "route", { list: O.MED_ROUTES, other: true, max: 1000 }) || "";
+  values.frequency = O.readChoice(body, "frequency", { list: O.MED_FREQUENCIES, other: true, max: 1000 }) || "";
   const errors = {};
   if (!values.name) errors.name = "Medication name is required.";
   checkLen(errors, values, "name", "Medication name", 120);
@@ -1085,7 +1098,8 @@ router.post("/patients/:id/diagnoses", requirePerm("clinical:write"), (req, res)
   const patient = loadPatient(req, res);
   if (!patient) return;
   const b = req.body || {};
-  const values = { icd10_code: str(b.icd10_code).toUpperCase(), description: str(b.description), onset_date: str(b.onset_date), is_primary: b.is_primary ? "1" : "" };
+  const code = O.readChoice(b, "icd10_code", { list: ICD10_CHOICES, other: true, max: 1000 }) || "";
+  const values = { icd10_code: code.replace(/\s+/g, "").toUpperCase(), description: str(b.description), onset_date: str(b.onset_date), is_primary: b.is_primary ? "1" : "" };
   const errors = {};
   if (!values.icd10_code) errors.icd10_code = "ICD-10 code is required.";
   else if (!ICD10_RE.test(values.icd10_code)) errors.icd10_code = "Enter a valid ICD-10 code, e.g. F41.1.";
