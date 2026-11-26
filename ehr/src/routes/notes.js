@@ -13,6 +13,7 @@ const { reviewNote } = require("../ai-review");
 const supervision = require("../supervision");
 const { countdown } = require("../countdown");
 const { isAhcccs } = require("../payers");
+const O = require("../options");
 const {
   html, raw, page, chartPage, notFound, csrfField, select, badge, getPatient, patientName,
   today, nowLocal, fmtDate, fmtTime, fmtTimestamp, humanize, TZ,
@@ -279,7 +280,8 @@ const TYPES = {
   contact: {
     label: "Contact note",
     formats: {
-      narrative: [tx1("contact_with", "Contact with / method", true, "e.g. Patient by phone; collateral (parent) by phone."),
+      // Two dropdowns (contact_who / contact_how); the combined text is stored in contact_with for records and printing.
+      narrative: [{ ...tx1("contact_with", "Contact with / method", true, "Who the contact was with, and how."), ui: "contact" },
         SESSION_AH, ...encounterHead("contact"), ta("narrative", "Narrative", true), ...encounterTail("contact")],
     },
   },
@@ -378,7 +380,8 @@ const TYPES = {
   discharge: {
     label: "Discharge summary",
     formats: {
-      narrative: [ta("discharge_reason", "Reason for discharge", true), ta("treatment_summary", "Summary of treatment", true),
+      narrative: [{ ...ta("discharge_reason", "Reason for discharge", true), ui: "choice", list: O.DISCHARGE_REASONS, other: true, noClone: true },
+        ta("treatment_summary", "Summary of treatment", true),
         ta("discharge_status", "Status at discharge", true), ta("recommendations", "Recommendations / referrals", true)],
     },
   },
@@ -674,6 +677,18 @@ function readForm(body, type, format, prev = {}) {
       const v = str(body[f.key]);
       if (v && !/^\d{1,3}$/.test(v)) errors[f.key] = `${f.label} must be a whole number.`;
       else content[f.key] = v;
+    } else if (f.kind === "text" && f.ui === "contact") {
+      const who = O.readChoice(body, "contact_who", { other: true, max: 200 }) || "";
+      const how = O.readChoice(body, "contact_how", { list: O.CONTACT_HOW });
+      if (how === undefined) errors.contact_how = "Choose a contact method from the list.";
+      content.contact_who = who;
+      content.contact_how = how || "";
+      // Fall back to a typed contact_with (older clients / API posts) when neither dropdown was used.
+      content[f.key] = who || how ? [who, how].filter(Boolean).join(" · ") : str(body[f.key]);
+    } else if (f.ui === "choice") {
+      const v = O.readChoice(body, f.key, { list: f.list, other: f.other, max: f.kind === "textarea" ? MAX_TEXT : 500 });
+      if (v === undefined) errors[f.key] = `Choose a valid option for ${f.label}.`;
+      else content[f.key] = v || "";
     } else if (f.kind === "textarea" || f.kind === "text") content[f.key] = str(body[f.key]);
     else if (f.kind === "edition") {
       const v = str(body[f.key]);
@@ -720,7 +735,8 @@ function readForm(body, type, format, prev = {}) {
       content.interventions = INTERVENTIONS.filter((i) => chosen.includes(i));
       content.interventions_other = str(body.interventions_other).slice(0, 500);
     } else if (f.kind === "mse") {
-      for (const [k] of MSE) content[`mse_${k}`] = str(body[`mse_${k}`]).slice(0, 2000);
+      // Dropdown per item; "Other" text (or an older free-text value) is stored as-is, so keys stay plain strings.
+      for (const [k] of MSE) content[`mse_${k}`] = O.readChoice(body, `mse_${k}`, { other: true, max: 2000 }) || "";
     } else if (f.kind === "risk") {
       const r = str(body.risk_level);
       if (r && !RISK_LEVELS.includes(r)) errors.risk_level = "Choose a risk level.";
@@ -748,6 +764,11 @@ function signErrors(note, { planObjectiveCount = 0, addressedCount = 0, ahcccs =
   for (const f of fieldsFor(note.type, note.format)) {
     if (["textarea", "text", "select", "date", "asam_level"].includes(f.kind) && needed(f) && empty(c[f.key])) {
       errors[f.key] = `${f.label} is required${f.required ? "" : AH}.`;
+    }
+    if (f.ui === "contact" && !empty(c[f.key])) {
+      // New-style notes need both dropdowns; a typed "Other" contact (or an older combined text) stands on its own.
+      if (empty(c.contact_who) && !empty(c.contact_how)) errors.contact_who = "Contact with: choose who the contact was with.";
+      else if (!empty(c.contact_who) && empty(c.contact_how) && O.inList(O.CONTACT_WHO, c.contact_who)) errors.contact_how = "Contact method is required.";
     }
     if (f.kind === "mse" && f.ahcccs && ahcccs && !MSE.some(([k]) => !empty(c[`mse_${k}`]))) {
       errors.mse = `Mental status exam: document at least appearance and mood${AH}.`;
@@ -887,6 +908,18 @@ function fieldInputs(type, format, v, errors, ctx = {}) {
     if (f.kind === "text" && f.ui === "number") {
       return html`<label>${f.label}${req_(f)}<input type="number" min="0" max="999" name="${f.key}" value="${v[f.key] || ""}">${errText(errors, f.key)}</label>`;
     }
+    if (f.kind === "text" && f.ui === "contact") {
+      // Older notes have only the combined text: show it as the "Other" contact so nothing is lost.
+      const who = v.contact_who || v.contact_how ? v.contact_who : v[f.key];
+      return html`<fieldset class="span-all"><legend>${f.label}${req_(f)}</legend><div class="form-grid">
+        <label>Contact with${O.choice({ name: "contact_who", list: O.CONTACT_WHO, other: true, value: who || "", placeholder: "Select…" })}${errText(errors, "contact_who")}</label>
+        <label>Method${O.choice({ name: "contact_how", list: O.CONTACT_HOW, value: v.contact_how || "", placeholder: "Select…" })}${errText(errors, "contact_how")}</label>
+      </div>${errText(errors, f.key)}</fieldset>`;
+    }
+    if (f.ui === "choice") {
+      return html`<label class="span-all">${f.label}${req_(f)}${f.hint ? html` <span class="hint">${f.hint}</span>` : ""}
+        ${O.choice({ name: f.key, list: f.list, other: f.other, value: v[f.key] || "", placeholder: "Select…" })}${errText(errors, f.key)}</label>`;
+    }
     if (f.kind === "textarea") {
       return html`<label class="span-all">${f.label}${req_(f)}${f.hint ? html` <span class="hint">${f.hint}</span>` : ""}
         <textarea name="${f.key}" rows="5">${v[f.key] || ""}</textarea>${errText(errors, f.key)}</label>`;
@@ -960,7 +993,7 @@ function fieldInputs(type, format, v, errors, ctx = {}) {
     }
     if (f.kind === "mse") {
       return html`<fieldset class="span-all"><legend>Mental status exam${f.ahcccs ? req_(f) : ""}</legend><div class="form-grid">
-        ${MSE.map(([k, label]) => html`<label>${label}<input type="text" name="mse_${k}" value="${v[`mse_${k}`] || ""}" maxlength="2000"></label>`)}
+        ${MSE.map(([k, label]) => html`<label>${label}${O.choice({ name: `mse_${k}`, list: O.MSE_OPTIONS[k], other: true, placeholder: "Not assessed", value: v[`mse_${k}`] || "" })}</label>`)}
       </div>${errText(errors, "mse")}</fieldset>`;
     }
     if (f.kind === "risk") {
