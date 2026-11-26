@@ -222,7 +222,7 @@ test("intake: AHCCCS assessment domains required for AHCCCS members only", async
   const st = await c.post(`/ehr/notes/${teen}/sign`, { password: PW });
   assert.equal(st.status, 400);
   assert.match(st.text, /CALOCUS/);
-  await c.post(`/ehr/notes/${teen}/edit`, intake({ loc_tool: "calocus", calocus_score: "18", calocus_level: "Level 2" }, { ahcccs: true }));
+  await c.post(`/ehr/notes/${teen}/edit`, intake({ loc_tool: "calocus", calocus_score: "18", calocus_level: "2" }, { ahcccs: true }));
   assert.equal((await c.post(`/ehr/notes/${teen}/sign`, { password: PW })).status, 302);
   t.db.prepare("UPDATE patients SET dob = '1990-05-05' WHERE id = ?").run(idOnly);
 });

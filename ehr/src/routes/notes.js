@@ -14,6 +14,7 @@ const supervision = require("../supervision");
 const { countdown } = require("../countdown");
 const { isAhcccs } = require("../payers");
 const O = require("../options");
+const { getList } = require("../lists");
 const {
   html, raw, page, chartPage, notFound, csrfField, select, badge, getPatient, patientName,
   today, nowLocal, fmtDate, fmtTime, fmtTimestamp, humanize, TZ,
@@ -76,6 +77,8 @@ const SESSION = { kind: "session", key: "session" };
 const INTERV = { kind: "interventions", key: "interventions" };
 const RISK = { kind: "risk", key: "risk" };
 const MSE_F = { kind: "mse", key: "mse" };
+/** Optional MSE on progress notes: never required to sign, hidden on the read view when blank. */
+const MSE_OPT = { ...MSE_F, optional: true };
 const sel = (key, label, options, required = false, hint = "") => ({ kind: "select", key, label, options, required, hint });
 const dt = (key, label, required = false, hint = "") => ({ kind: "date", key, label, required, hint });
 /**
@@ -191,7 +194,7 @@ function encounterHead(type) {
     ah(ta("audio_only_reason", "Why video wasn't available (audio-only)", false, "Audio-only sessions must also run over 10 minutes."),
       { when: (c) => c.telehealth_modality === "audio_only", noClone: true }),
     ah(tx1("participants", "Participants present", false, "Names and roles, e.g. Member; mother (guardian); case manager.")),
-    ah(tx1("preferred_language", "Preferred language")),
+    ah({ ...tx1("preferred_language", "Preferred language"), ui: "choice", list: O.LANGUAGES, other: true }),
     ah(sel("interpreter", "Interpreter", INTERPRETER)),
     ah(tx1("interpreter_name", "Interpreter name / ID"), { when: (c) => c.interpreter === "provided" }),
   ];
@@ -237,7 +240,7 @@ const INTAKE_AHCCCS = [
   ah(ta("further_evaluation", "Need for further or specialty evaluation")),
   ah(sel("loc_tool", "Level-of-care tool", LOC_TOOLS, false, "CALOCUS for ages 6–17 (intake, then every 6 months); ASAM for adults with a substance use disorder.")),
   ah(tx1("calocus_score", "CALOCUS composite score"), { when: (c) => c.loc_tool === "calocus" }),
-  ah(tx1("calocus_level", "CALOCUS level of care"), { when: (c) => c.loc_tool === "calocus" }),
+  ah(sel("calocus_level", "CALOCUS level of care", [{ value: "", label: "Select…" }, ...O.CALOCUS_LEVELS]), { when: (c) => c.loc_tool === "calocus" }),
   ah(sel("shared_pcp", "Assessment shared with PCP / Health Home?", YES_NO)),
   ah(dt("shared_pcp_date", "Date shared with PCP / Health Home"), { when: (c) => c.shared_pcp === "yes" }),
 ];
@@ -248,10 +251,10 @@ const TYPES = {
     formats: {
       dap: [SESSION, ...encounterHead("progress"), ta("data", "Data", true, "What the client said and did; observations."),
         ta("assessment", "Assessment", true, "Clinical interpretation and progress toward goals."),
-        ta("plan", "Plan", true, "Next steps, homework, next session."), INTERV, ...encounterTail("progress"), RISK],
+        ta("plan", "Plan", true, "Next steps, homework, next session."), MSE_OPT, INTERV, ...encounterTail("progress"), RISK],
       soap: [SESSION, ...encounterHead("progress"), ta("subjective", "Subjective", true, "Client's report in their words."),
         ta("objective", "Objective", true, "Observations, measures, presentation."),
-        ta("assessment", "Assessment", true), ta("plan", "Plan", true), INTERV, ...encounterTail("progress"), RISK],
+        ta("assessment", "Assessment", true), ta("plan", "Plan", true), MSE_OPT, INTERV, ...encounterTail("progress"), RISK],
     },
   },
   intake: {
@@ -288,7 +291,8 @@ const TYPES = {
   group: {
     label: "Group note",
     formats: {
-      group: [tx1("group_name", "Group name", true, "e.g. DBT skills group, Anxiety group."), tx1("group_topic", "Session topic", true),
+      // Group names come from the clinic's list (Admin > Lists), resolved per request; "Other" keeps free text.
+      group: [{ ...tx1("group_name", "Group name", true, "Pick the clinic group, or choose Other and type it."), ui: "choice", listFrom: "group", other: true }, tx1("group_topic", "Session topic", true),
         SESSION, ...encounterHead("group"), tx1("attendance", "Attendance", false, "e.g. 7 of 9 members present. Don't name other members."),
         ta("group_content", "Group content", true, "What was covered this session."),
         ta("participation", "Client participation and response", true, "This client's engagement, contributions and response."),
@@ -306,7 +310,7 @@ const TYPES = {
         ta("professional_contacts", "5. Professionals and crisis lines", true, "Clinician, after-hours line, 988, nearest emergency department."),
         ta("means_safety", "6. Making my environment safer", true, "Steps to limit access to lethal means (medications, firearms, etc.)."),
         ta("reasons_for_living", "Reasons for living", false, "What matters most to the client."),
-        tx1("copy_given", "Copy given to client", false, "e.g. Printed copy given; photo on phone."), RISK],
+        { ...tx1("copy_given", "Copy given to client"), ui: "choice", list: O.COPY_GIVEN, other: false }, RISK],
     },
   },
   asam: {
@@ -342,7 +346,7 @@ const TYPES = {
         sel("direction", "Direction", ROI_DIRECTIONS, true),
         tx1("recipient", "Recipient / source", true, "Name, organization, address or fax."),
         ta("information", "Specific information covered", true, "e.g. Dates of attendance, diagnosis, treatment summary. Be as narrow as possible."),
-        tx1("purpose", "Purpose", true, "e.g. Coordination of care with primary care provider."),
+        { ...tx1("purpose", "Purpose", true), ui: "choice", list: O.ROI_PURPOSES, other: true },
         dt("expires_on", "Expires on", true, "Date or event when consent ends."),
         sel("includes_sud", "Includes substance use disorder records (42 CFR Part 2)?", YES_NO, true),
         sel("consent_method", "How consent was obtained", CONSENT_METHODS, true),
@@ -382,7 +386,7 @@ const TYPES = {
     formats: {
       narrative: [{ ...ta("discharge_reason", "Reason for discharge", true), ui: "choice", list: O.DISCHARGE_REASONS, other: true, noClone: true },
         ta("treatment_summary", "Summary of treatment", true),
-        ta("discharge_status", "Status at discharge", true), ta("recommendations", "Recommendations / referrals", true)],
+        { ...ta("discharge_status", "Status at discharge", true), ui: "choice", list: O.DISCHARGE_STATUS, other: true, noClone: true }, ta("recommendations", "Recommendations / referrals", true)],
     },
   },
 };
@@ -392,6 +396,16 @@ function formatsFor(type) { return Object.keys(TYPES[type].formats); }
 function fieldsFor(type, format) {
   const t = TYPES[type];
   return t.formats[format] || t.formats[formatsFor(type)[0]];
+}
+/** Option list for a `ui: "choice"` field: static `list`, or the clinic list named by `listFrom` (needs db). */
+function choiceList(f, db) {
+  if (!f.listFrom) return f.list;
+  return db ? getList(db, f.listFrom) : [];
+}
+/** Select options plus a "(saved earlier)" entry for a stored value that is no longer an option. */
+function withSaved(options, cur) {
+  const v = cur == null ? "" : String(cur);
+  return v && !options.some((o) => o.value === v) ? [...options, { value: v, label: `${v} (saved earlier)` }] : options;
 }
 const typeLabel = (n) => (TYPES[n.type] ? TYPES[n.type].label : humanize(n.type)) +
   (n.type === "progress" ? ` (${String(n.format).toUpperCase()})` : "");
@@ -664,7 +678,7 @@ function saveObjectives(db, noteId, selected) {
 }
 
 /** Read submitted form fields into { content, risk_level, service_date } plus validation errors (draft-level). */
-function readForm(body, type, format, prev = {}) {
+function readForm(body, type, format, prev = {}, db = null) {
   const content = {};
   const errors = {};
   let risk_level = null;
@@ -686,8 +700,10 @@ function readForm(body, type, format, prev = {}) {
       // Fall back to a typed contact_with (older clients / API posts) when neither dropdown was used.
       content[f.key] = who || how ? [who, how].filter(Boolean).join(" · ") : str(body[f.key]);
     } else if (f.ui === "choice") {
-      const v = O.readChoice(body, f.key, { list: f.list, other: f.other, max: f.kind === "textarea" ? MAX_TEXT : 500 });
-      if (v === undefined) errors[f.key] = `Choose a valid option for ${f.label}.`;
+      const v = O.readChoice(body, f.key, { list: choiceList(f, db), other: f.other, max: f.kind === "textarea" ? MAX_TEXT : 500 });
+      // A value saved before the field became a dropdown is kept when re-submitted unchanged.
+      if (v === undefined && str(body[f.key]) === String(prev[f.key] ?? "")) content[f.key] = prev[f.key];
+      else if (v === undefined) errors[f.key] = `Choose a valid option for ${f.label}.`;
       else content[f.key] = v || "";
     } else if (f.kind === "textarea" || f.kind === "text") content[f.key] = str(body[f.key]);
     else if (f.kind === "edition") {
@@ -707,7 +723,7 @@ function readForm(body, type, format, prev = {}) {
     }
     else if (f.kind === "select") {
       const v = str(body[f.key]);
-      if (v && !f.options.some((o) => o.value === v)) errors[f.key] = `Choose a valid option for ${f.label}.`;
+      if (v && !f.options.some((o) => o.value === v) && v !== String(prev[f.key] ?? "")) errors[f.key] = `Choose a valid option for ${f.label}.`;
       else content[f.key] = v;
     } else if (f.kind === "date") {
       const v = str(body[f.key]);
@@ -918,7 +934,7 @@ function fieldInputs(type, format, v, errors, ctx = {}) {
     }
     if (f.ui === "choice") {
       return html`<label class="span-all">${f.label}${req_(f)}${f.hint ? html` <span class="hint">${f.hint}</span>` : ""}
-        ${O.choice({ name: f.key, list: f.list, other: f.other, value: v[f.key] || "", placeholder: "Select…" })}${errText(errors, f.key)}</label>`;
+        ${O.choice({ name: f.key, list: choiceList(f, ctx.db), other: f.other, value: v[f.key] || "", placeholder: "Select…" })}${errText(errors, f.key)}</label>`;
     }
     if (f.kind === "textarea") {
       return html`<label class="span-all">${f.label}${req_(f)}${f.hint ? html` <span class="hint">${f.hint}</span>` : ""}
@@ -930,7 +946,7 @@ function fieldInputs(type, format, v, errors, ctx = {}) {
     }
     if (f.kind === "select") {
       return html`<label class="span-all">${f.label}${req_(f)}${f.hint ? html` <span class="hint">${f.hint}</span>` : ""}
-        ${select(f.key, f.options, v[f.key])}${errText(errors, f.key)}</label>`;
+        ${select(f.key, withSaved(f.options, v[f.key]), v[f.key])}${errText(errors, f.key)}</label>`;
     }
     if (f.kind === "date") {
       return html`<label>${f.label}${req_(f)}${f.hint ? html` <span class="hint">${f.hint}</span>` : ""}
@@ -1009,7 +1025,7 @@ function fieldInputs(type, format, v, errors, ctx = {}) {
 }
 
 function formCtx(req, patient) {
-  return { ahcccs: isAhcccs(req.db, patient.id),
+  return { ahcccs: isAhcccs(req.db, patient.id), db: req.db,
     diagnoses: req.db.prepare("SELECT icd10_code, description FROM diagnoses WHERE patient_id = ? AND status = 'active' ORDER BY is_primary DESC, id").all(patient.id) };
 }
 
@@ -1064,7 +1080,7 @@ function noteBody(note) {
     if (f.kind === "textarea" || f.kind === "text") return section(f.label, c[f.key]);
     if (f.kind === "select") {
       const o = f.options.find((x) => x.value === c[f.key] && x.value !== "");
-      return section(f.label, o ? o.label : "");
+      return section(f.label, o ? o.label : c[f.key]);
     }
     if (f.kind === "date") return section(f.label, c[f.key] ? fmtDate(c[f.key]) : "");
     if (f.kind === "edition") {
@@ -1104,6 +1120,7 @@ function noteBody(note) {
     }
     if (f.kind === "mse") {
       const rows = MSE.filter(([k]) => c[`mse_${k}`]);
+      if (f.optional && !rows.length) return "";
       return html`<div class="note-section"><h3>Mental status exam</h3>${rows.length
         ? html`<dl class="facts">${rows.map(([k, label]) => html`<dt>${label}</dt><dd>${c[`mse_${k}`]}</dd>`)}</dl>`
         : html`<p class="muted">Not documented</p>`}</div>`;
@@ -1358,7 +1375,7 @@ router.post("/patients/:id/notes", requirePerm("clinical:write"), (req, res) => 
   let format = str(req.body.format);
   if (!formatsFor(type).includes(format)) format = formatsFor(type)[0];
   const { appt, error } = loadAppointment(req, patient.id, str(req.body.appointment_id));
-  const form = readForm(req.body, type, format);
+  const form = readForm(req.body, type, format, {}, req.db);
   if (error) form.errors.appointment_id = error;
   const objs = PLAN_LINKED_TYPES.includes(type) ? readObjectives(req.db, req.body, patient.id) : { selected: {}, error: null };
   if (objs.error) form.errors.objectives = objs.error;
@@ -1439,7 +1456,7 @@ router.post("/notes/:noteId/edit", requirePerm("clinical:write"), (req, res) => 
   const loaded = loadNote(req, res);
   if (!loaded || !editGuard(req, res, loaded.note)) return;
   const { note, patient } = loaded;
-  const form = readForm(req.body, note.type, note.format, parseContent(note));
+  const form = readForm(req.body, note.type, note.format, parseContent(note), req.db);
   const objs = PLAN_LINKED_TYPES.includes(note.type) ? readObjectives(req.db, req.body, patient.id) : { selected: {}, error: null };
   if (objs.error) form.errors.objectives = objs.error;
   if (Object.keys(form.errors).length) {
