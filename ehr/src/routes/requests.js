@@ -8,6 +8,7 @@ const express = require("express");
 const { requirePerm } = require("../auth");
 const { audit } = require("../audit");
 const { tx, nextMrn } = require("../db");
+const O = require("../options");
 const { html, page, csrfField, badge, select, notFound, humanize, fmtDate, fmtTimestamp, patientName, today } = require("../views");
 
 /* ------------------------------------------------------------------ */
@@ -100,12 +101,22 @@ function parseSubmission(body) {
     const norm = values[col].toLowerCase().replace(/-/g, "_");
     if (allowed.includes(norm)) values[col] = norm; else fields[col] = "Please choose a valid option.";
   }
+  // Insurance dropdown: "Other" takes the "If other" text box; anything else (a listed payer, "Not sure", or older
+  // free-text submissions) is kept as sent.
+  if (/^(other|__other)$/i.test(values.insurance)) values.insurance = str(body.insurance_other) || "Other";
+  else if (!values.insurance && str(body.insurance_other)) values.insurance = str(body.insurance_other);
   tooLong("insurance", "Insurance");
   tooLong("reason", "Reason");
+  // Main concern: one of O.MAIN_CONCERNS. There is no column for it, so it's kept as the last line of the reason.
+  const concern = str(body.main_concern);
+  if (concern) {
+    if (!O.inList(O.MAIN_CONCERNS, concern)) fields.main_concern = "Please choose a valid option.";
+    else if (!fields.reason) values.reason = values.reason ? `${values.reason}\n\nMain concern: ${concern}` : `Main concern: ${concern}`;
+  }
   if (!truthy(body.consent)) fields.consent = "Please confirm you understand this form is not for emergencies and agree to be contacted.";
 
   // Cap lengths defensively and store empty strings as NULL.
-  for (const col of Object.keys(values)) values[col] = values[col] ? values[col].slice(0, MAX[col]) : null;
+  for (const col of Object.keys(values)) values[col] = values[col] ? values[col].slice(0, MAX[col] + (col === "reason" ? 80 : 0)) : null;
   return { values, fields };
 }
 
@@ -194,6 +205,13 @@ function timeAgo(utc) {
     if (n >= 1) return `${n} ${name}${n === 1 ? "" : "s"} ago`;
   }
   return "just now";
+}
+
+/** Split the "Main concern: X" line (saved as the reason's last line) back out of the reason. */
+function splitConcern(reason) {
+  const m = /(?:^|\n\n)Main concern: ([^\n]+)$/.exec(String(reason || ""));
+  if (!m || !O.inList(O.MAIN_CONCERNS, m[1])) return { reason: reason || "", concern: null };
+  return { reason: String(reason).slice(0, m.index), concern: m[1] };
 }
 
 const label = (v) => (v ? humanize(v) : "");
@@ -304,8 +322,9 @@ function renderDetail(req, r, { error, status = 200 } = {}, res) {
             ${row("Service", label(r.service))}
             ${row("Visit preference", label(r.visit_preference))}
             ${row("Insurance", r.insurance)}
+            ${row("Main concern", splitConcern(r.reason).concern)}
             ${row("Referral source", label(r.referral_source))}
-            <tr><th scope="row">Reason</th><td>${r.reason ? html`<div class="prewrap">${r.reason}</div>` : display(null)}</td></tr>
+            <tr><th scope="row">Reason</th><td>${splitConcern(r.reason).reason ? html`<div class="prewrap">${splitConcern(r.reason).reason}</div>` : display(null)}</td></tr>
             ${row("Last handled by", handler ? handler.name : null)}
           </tbody></table>
         </section>

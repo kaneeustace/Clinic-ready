@@ -166,8 +166,45 @@
               <div class="form-row">
                 <div class="field">
                   <label for="insurance">Insurance provider <span class="muted">(optional)</span></label>
-                  <input type="text" id="insurance" name="insurance_provider" autocomplete="off" aria-describedby="insurance-hint">
+                  <select id="insurance" name="insurance_provider" aria-describedby="insurance-hint">
+                    <option value="">Choose one</option>
+                    <optgroup label="Arizona Medicaid (AHCCCS) plans">
+                      <option value="Mercy Care">Mercy Care</option>
+                      <option value="Banner University Health Plans">Banner University Health Plans</option>
+                      <option value="Arizona Complete Health – Complete Care Plan">Arizona Complete Health – Complete Care Plan</option>
+                      <option value="UnitedHealthcare Community Plan">UnitedHealthcare Community Plan</option>
+                      <option value="Care1st">Care1st</option>
+                      <option value="Molina Complete Care of Arizona">Molina Complete Care of Arizona</option>
+                      <option value="Health Choice / AzCH">Health Choice / AzCH</option>
+                      <option value="AHCCCS Fee-for-Service">AHCCCS Fee-for-Service</option>
+                      <option value="AIHP – American Indian Health Program">AIHP – American Indian Health Program</option>
+                      <option value="DCS CHP">DCS CHP</option>
+                    </optgroup>
+                    <optgroup label="Medicare and military">
+                      <option value="Medicare">Medicare</option>
+                      <option value="Medicare Advantage">Medicare Advantage</option>
+                      <option value="TRICARE">TRICARE</option>
+                      <option value="VA Community Care">VA Community Care</option>
+                    </optgroup>
+                    <optgroup label="Commercial insurance">
+                      <option value="Aetna">Aetna</option>
+                      <option value="Blue Cross Blue Shield of Arizona">Blue Cross Blue Shield of Arizona</option>
+                      <option value="Cigna / Evernorth">Cigna / Evernorth</option>
+                      <option value="UnitedHealthcare">UnitedHealthcare</option>
+                      <option value="Optum Behavioral Health">Optum Behavioral Health</option>
+                      <option value="Humana">Humana</option>
+                      <option value="Magellan Health">Magellan Health</option>
+                      <option value="Ambetter">Ambetter</option>
+                    </optgroup>
+                    <optgroup label="No insurance">
+                      <option value="Self-pay">Self-pay</option>
+                    </optgroup>
+                    <option value="Not sure">Not sure</option>
+                    <option value="Other">Other (type it below)</option>
+                  </select>
                   <span class="hint" id="insurance-hint">Just the plan name is fine. No member ID needed.</span>
+                  <label for="insurance-other" class="hint">If other, which plan? <span class="muted">(optional)</span></label>
+                  <input type="text" id="insurance-other" name="insurance_other" maxlength="200" autocomplete="off">
                 </div>
                 <div class="field">
                   <label for="referral">How did you hear about us? <span class="muted">(optional)</span></label>
@@ -182,6 +219,23 @@
                     <option value="other">Other</option>
                   </select>
                 </div>
+              </div>
+
+              <div class="field">
+                <label for="main-concern">Main concern <span class="muted">(optional)</span></label>
+                <select id="main-concern" name="main_concern">
+                  <option value="">Choose one</option>
+                  <option value="Anxiety or stress">Anxiety or stress</option>
+                  <option value="Depression or low mood">Depression or low mood</option>
+                  <option value="Trauma / PTSD">Trauma / PTSD</option>
+                  <option value="Relationship or family">Relationship or family</option>
+                  <option value="Substance use">Substance use</option>
+                  <option value="ADHD / focus">ADHD / focus</option>
+                  <option value="Grief or loss">Grief or loss</option>
+                  <option value="Medication management">Medication management</option>
+                  <option value="Child or teen concerns">Child or teen concerns</option>
+                  <option value="Something else">Something else</option>
+                </select>
               </div>
 
               <div class="field">

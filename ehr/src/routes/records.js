@@ -465,7 +465,7 @@ function recordsPage(req, res, patient, { errors = [], values = {}, status = 200
           <label class="check"><input type="checkbox" name="released" value="1" ${v.released ? raw("checked") : ""}> Released to the patient
             (or the patient's designee); logs a disclosure with basis "patient request"</label>
           <div class="form-grid">
-            <label for="released_to">Released to<input id="released_to" name="released_to" maxlength="200" value="${v.released_to || ""}" placeholder="Patient"></label>
+            <label for="released_to">Released to${O.choice({ name: "released_to", list: O.RELEASED_TO, value: v.released_to || "", other: true, placeholder: "The client (default)", otherPlaceholder: "Who received it" })}</label>
             <label for="released_method">Method${select("released_method", METHODS.map((m) => ({ value: m, label: m ? humanize(m) : "Select…" })), v.released_method)}</label>
           </div>
           <p class="hint">Leave unchecked for internal prints; those are audited but are not disclosures.</p>
@@ -494,7 +494,7 @@ router.post("/patients/:id/records/export", requirePerm("clinical:read"), (req, 
   const b = req.body || {};
   const values = {
     from: str(b.from, 10), to: str(b.to, 10), sections: arr(b.sections).filter((s) => SECTION_KEYS.includes(s)),
-    format: b.format === "json" ? "json" : "html", released: b.released === "1", released_to: str(b.released_to, 200),
+    format: b.format === "json" ? "json" : "html", released: b.released === "1", released_to: O.readChoice(b, "released_to", { list: O.RELEASED_TO, other: true, max: 200 }) || "",
     released_method: METHODS.includes(str(b.released_method)) ? str(b.released_method) : "",
   };
   const errors = [];

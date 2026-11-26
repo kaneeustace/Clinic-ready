@@ -430,17 +430,37 @@ clientRouter.get("/messages/new", requirePortal, (req, res) => {
     <form class="card stack" method="post" action="/portal/messages">${csrf(req)}
       <label for="topic">Topic ${O.choice({ name: "topic", list: O.PORTAL_TOPICS, value: topic, required: true, placeholder: "What is this about?" })}</label>
       <label>Subject <span class="hint">(optional)</span><input name="subject" maxlength="80" value=""></label>
-      <label>Message <textarea name="body" rows="7" maxlength="4000" required>${topic === "appointment" ? "Days and times that work for me: " : ""}</textarea></label>
+      <label>Message <textarea name="body" rows="7" maxlength="4000" required>${topic === "appointment" ? "I'd like to request an appointment." : ""}</textarea></label>
+      <fieldset class="stack" id="appt-prefs"><legend>If you're asking about an appointment <span class="hint">(optional)</span></legend>
+        <div><span class="small">Days that work</span><div class="row">${O.APPT_DAYS.map((d) => html`<label class="check"><input type="checkbox" name="appt_days" value="${d}"> ${d}</label>`)}</div></div>
+        <div><span class="small">Times that work</span><div class="row">${O.APPT_TIMES.map((x) => html`<label class="check"><input type="checkbox" name="appt_times" value="${x}"> ${x}</label>`)}</div></div>
+        <label for="visit_pref">Visit type ${O.choice({ name: "visit_pref", list: O.VISIT_PREFS, placeholder: "No preference" })}</label>
+      </fieldset>
       <div class="row"><button class="btn btn--primary" type="submit">Send</button><a class="btn btn--ghost" href="/portal/messages">Cancel</a></div>
     </form>` }));
 });
+
+/** Appointment preferences (checkboxes + visit type) as one readable line, or "" when nothing was chosen. */
+function apptPrefsLine(b) {
+  const picks = (v, list) => [].concat(v ?? []).map(String).filter((x) => list.includes(x)).filter((x, i, a) => a.indexOf(x) === i);
+  const days = picks(b.appt_days, O.APPT_DAYS), times = picks(b.appt_times, O.APPT_TIMES);
+  const visit = O.readChoice(b, "visit_pref", { list: O.VISIT_PREFS });
+  const parts = [];
+  if (days.length) parts.push(`Days: ${days.join(", ")}`);
+  if (times.length) parts.push(`Times: ${times.join(", ")}`);
+  if (visit) parts.push(`Visit: ${visit}`);
+  return parts.join(" · ");
+}
 
 clientRouter.post("/messages", requirePortal, (req, res) => {
   const { patient: p } = req.portal;
   const b = req.body || {};
   const topic = O.readChoice(b, "topic", { list: O.PORTAL_TOPICS });
-  const typed = str(b.subject, 120), body = str(b.body, 4000);
+  const typed = str(b.subject, 120);
+  let body = str(b.body, 4000);
   if (!topic) { req.pflash("error", "Choose what your message is about."); return res.redirect("/portal/messages/new"); }
+  const prefs = apptPrefsLine(b);
+  if (prefs) body = body ? `${body}\n\n${prefs}`.slice(0, 4400) : prefs;
   if (!body) { req.pflash("error", "Write your message."); return res.redirect(`/portal/messages/new?topic=${encodeURIComponent(topic)}`); }
   const label = O.labelFor(O.PORTAL_TOPICS, topic);
   const subject = (typed ? `${label}: ${typed}` : label).slice(0, 120);
@@ -750,7 +770,8 @@ function portalTab(req, res, patient, { inviteLink = null } = {}, status = 200) 
         </div></div>` : html`<p class="muted">No messages.</p>`}
       ${canMessage(u) && acct ? html`<details class="loc-action"><summary class="btn btn--sm">New message to the client</summary>
         <form method="post" action="${base}/portal/messages" class="stack">${raw(`<input type="hidden" name="_csrf" value="${req.session.csrf_token}">`)}
-          <label>Subject <input name="subject" maxlength="120" required></label>
+          <label for="template">Template <span class="hint">(optional, fills a blank subject)</span> ${O.choice({ name: "template", list: O.STAFF_MESSAGE_TEMPLATES, placeholder: "No template" })}</label>
+          <label>Subject <span class="hint">(or choose a template)</span><input name="subject" maxlength="120"></label>
           <label>Message <textarea name="body" rows="4" maxlength="4000" required></textarea></label>
           <button class="btn btn--primary btn--sm" type="submit">Send</button></form></details>` : ""}
     </section>`, { title: `Portal · ${patientName(patient)}` }));
@@ -815,6 +836,7 @@ router.post("/patients/:id/portal/messages", requirePerm("patients:write"), (req
   const b = req.body || {};
   const body = str(b.body, 4000);
   let threadId = Number(b.thread_id) || null, subject = str(b.subject, 120);
+  if (!threadId && !subject) subject = O.readChoice(b, "template", { list: O.STAFF_MESSAGE_TEMPLATES }) || "";
   if (threadId) {
     const first = req.db.prepare("SELECT * FROM portal_messages WHERE id = ? AND patient_id = ? AND thread_id = id").get(threadId, p.id);
     if (!first) { req.flash("error", "That conversation wasn't found."); return res.redirect(`/ehr/patients/${p.id}/portal`); }

@@ -23,6 +23,15 @@ const MAX_PAGES = 100;
 const NOTE_TYPES = ["", "progress (psychotherapy)", "intake / diagnostic assessment", "group", "psychiatry / medication management",
   "case management", "peer support", "crisis", "treatment plan", "discharge summary", "other"];
 
+// Quick picks for the reviewer context; ticked labels lead the typed context ("Telehealth; CPT 90837; ...").
+const CONTEXT_PICKS = ["Telehealth", "Group session", "Family session", "Crisis", "CPT 90791", "CPT 90832", "CPT 90834", "CPT 90837"];
+
+/** Combine the ticked quick picks and the typed context into the text sent for review (max 500 chars). */
+function buildContext(picks, typed) {
+  const chosen = [].concat(picks ?? []).map(String).filter((x, i, a) => CONTEXT_PICKS.includes(x) && a.indexOf(x) === i);
+  return [chosen.join("; "), String(typed || "").trim()].filter(Boolean).join("; ").slice(0, 500);
+}
+
 /** Rough page count from the PDF structure (good enough for a limit check). */
 function pageCount(buf) {
   const s = buf.toString("latin1");
@@ -53,6 +62,8 @@ function scanPage(req, res, { values = {}, error = null, review = null, file = n
               <select name="payer">${Object.keys(ai.PDF_PAYERS).map((k) => html`<option value="${k}" ${k === (values.payer || "commercial") ? raw("selected") : ""}>${{ commercial: "Commercial insurance", medicare: "Medicare", medicaid: "Medicaid (other state)", ahcccs: "AHCCCS (Arizona Medicaid)" }[k]}</option>`)}</select></label>
             <label>Note type <span class="hint">(optional)</span>
               <select name="note_type">${NOTE_TYPES.map((t) => html`<option value="${t}" ${t === (values.note_type || "") ? raw("selected") : ""}>${t ? t[0].toUpperCase() + t.slice(1) : "Let the AI tell"}</option>`)}</select></label>
+            <fieldset class="span-all"><legend>Quick picks <span class="hint">(optional, added to what the reviewer is told)</span></legend>
+              <div class="row">${CONTEXT_PICKS.map((x) => html`<label class="check"><input type="checkbox" name="context_pick" value="${x}" ${(values.picks || []).includes(x) ? raw("checked") : ""}> ${x}</label>`)}</div></fieldset>
             <label class="span-all">Anything the reviewer should know <span class="hint">(optional, e.g. billed CPT 90837, telehealth)</span>
               <input type="text" name="context" maxlength="500" value="${values.context || ""}"></label>
           </div>
@@ -73,7 +84,8 @@ router.get("/scan", requirePerm("clinical:write"), (req, res) => scanPage(req, r
 router.post("/scan", requirePerm("clinical:write"), async (req, res) => {
   const b = req.body || {};
   const values = { payer: ai.PDF_PAYERS[b.payer] ? b.payer : "commercial", note_type: NOTE_TYPES.includes(b.note_type) ? b.note_type : "",
-    context: String(b.context || "").trim().slice(0, 500) };
+    context: String(b.context || "").trim().slice(0, 500),
+    picks: [].concat(b.context_pick ?? []).map(String).filter((x) => CONTEXT_PICKS.includes(x)) };
   const fail = (msg, code = 400) => scanPage(req, res, { values, error: msg }, code);
   const m = /^data:application\/pdf;base64,([A-Za-z0-9+/=\s]+)$/.exec(String(b.pdf_data || ""));
   if (!m) return fail("Choose a PDF file to scan.");
@@ -83,9 +95,9 @@ router.post("/scan", requirePerm("clinical:write"), async (req, res) => {
   const pages = pageCount(buf);
   if (pages > MAX_PAGES) return fail(`That PDF has about ${pages} pages; the scanner takes up to ${MAX_PAGES}.`);
   if (!ai.aiStatus().enabled) return fail("AI review is turned off, so PDFs can't be scanned yet.", 503);
-  const result = await ai.reviewPdf({ data: buf.toString("base64"), payer: values.payer, noteType: values.note_type, context: values.context });
+  const result = await ai.reviewPdf({ data: buf.toString("base64"), payer: values.payer, noteType: values.note_type, context: buildContext(values.picks, values.context) });
   audit(req, "scan_pdf", null, null, null, `${values.payer}; ${pages} pages; ${Math.round(buf.length / 1024)} KB; ${result.ok ? `${result.findings.length} findings` : "error"}`);
   scanPage(req, res, { values, review: { rules: [], ai: result }, file: { pages, bytes: buf.length } }, result.ok ? 200 : 502);
 });
 
-module.exports = { router, pageCount };
+module.exports = { router, pageCount, buildContext, CONTEXT_PICKS };

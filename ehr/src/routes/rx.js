@@ -9,7 +9,10 @@
  *   GET  /prescriptions/:rid/print                   printable prescription (first print = original; reprints say COPY)
  *   POST /prescriptions/:rid/discontinue             stop it (also ends it on the medication list)
  *   POST /prescriptions/:rid/void                    entered in error / never sent
- *   GET  /prescriptions                              prescription log (mine, or everyone's for admins), controlled filter, CSV
+ *   GET  /prescriptions                              prescription log (mine, or everyone's for admins), controlled filter, CSV,
+ *                                                    plus the saved-pharmacy list (admins and prescribers)
+ *   POST /prescriptions/pharmacies                   add a saved pharmacy
+ *   POST /prescriptions/pharmacies/:phid/remove      remove one from the list (active = 0)
  *   POST /admin/users/:id/prescriber                 administrator: who may prescribe, DEA number, state license
  *
  * Federal rules built in (21 CFR 1306): Schedule II has no refills; Schedule III-IV at most 5 refills and the
@@ -55,6 +58,41 @@ const isDate = (s) => DATE_RE.test(s) && !Number.isNaN(Date.parse(`${s}T00:00:00
 const str = (v, n = 500) => String(v ?? "").trim().slice(0, n);
 const fmtQty = (n) => String(Math.round(n * 100) / 100);
 const ICD_RE = /^[A-TV-Z][0-9][0-9A-Z](\.[0-9A-Z]{1,4})?$/;
+
+/* Stop / void reasons: the choice widget adds its own "Other (type it)", so the lists' plain "Other" is dropped. */
+const DISCONTINUE_REASONS = O.RX_DISCONTINUE_REASONS.filter((x) => x !== "Other");
+const VOID_REASONS = O.RX_VOID_REASONS.filter((x) => x !== "Other");
+
+/* Saved pharmacies (clinic-wide list). */
+const activePharmacies = (db) => db.prepare("SELECT * FROM pharmacies WHERE active = 1 ORDER BY name COLLATE NOCASE, id").all();
+const pharmacyText = (ph) => [ph.name, ph.address].filter(Boolean).join(", ");
+const pharmacyLabel = (ph) => [ph.name, ph.address].filter(Boolean).join(" · ");
+
+/** Sig builder: "Inject" + "0.5" + "mL" + "into the muscle" + "once weekly" + for "sleep" -> "Inject 0.5 mL into the muscle once weekly for sleep." */
+function buildSig(b) {
+  const pick = (name, list) => O.readChoice(b, name, { list }) || "";
+  const action = pick("sig_action", O.SIG_ACTIONS);
+  const amountRaw = str(b.sig_amount, 12);
+  const amount = /^\d{0,5}(\.\d{1,3})?$/.test(amountRaw) && Number(amountRaw) > 0 ? String(Number(amountRaw)) : "";
+  const unit = pick("sig_unit", O.SIG_UNITS);
+  const route = pick("sig_route", O.SIG_ROUTES);
+  const freq = pick("sig_frequency", O.SIG_FREQUENCIES);
+  const purpose = str(b.sig_for, 120).replace(/^for\s+/i, "").replace(/[.\s]+$/, "");
+  const given = !!(action || amountRaw || unit || route || freq || purpose);
+  if (!action) return { given, sig: "", amountBad: !!amountRaw && !amount };
+  const words = [action, amount, amount || unit ? unit : "", route, freq].filter(Boolean).join(" ");
+  return { given, sig: `${words}${purpose ? ` for ${purpose}` : ""}.`, amountBad: !!amountRaw && !amount };
+}
+
+/** Drug name suggestions: template drugs plus the last 200 distinct drugs prescribed at the clinic. */
+function drugSuggestions(db) {
+  const seen = new Set();
+  const out = [];
+  const add = (d) => { const k = String(d || "").trim(); if (k && !seen.has(k.toLowerCase())) { seen.add(k.toLowerCase()); out.push(k); } };
+  TEMPLATES.forEach((x) => add(x.drug));
+  db.prepare("SELECT drug FROM prescriptions GROUP BY lower(drug) ORDER BY max(id) DESC LIMIT 200").all().forEach((r) => add(r.drug));
+  return out;
+}
 
 /**
  * Credentials that carry prescriptive authority: MD, DO, PA/PA-C, APRN, and nurse practitioners (PMHNP, FNP, AGNP,
@@ -140,10 +178,27 @@ function readRx(b, db, patient, user) {
   v.allow_duplicate = b.allow_duplicate === "1" ? 1 : 0;
   v.allergy_override = b.allergy_override === "1" ? 1 : 0;
   v.renewed_from = /^\d+$/.test(String(b.renewed_from || "")) ? Number(b.renewed_from) : null;
-  v.diagnosis = v.diagnosis.toUpperCase();
+  // Diagnosis: the client's active diagnoses as a dropdown, with "Other" for any ICD-10 code.
+  v.diagnosis = (O.readChoice(b, "diagnosis", { other: true, max: 10 }) || "").toUpperCase();
+  // Saved pharmacy: fills the pharmacy text fields when they're blank.
+  v.pharmacy_id = /^\d+$/.test(String(b.pharmacy_id || "")) ? String(b.pharmacy_id) : "";
+  v.save_pharmacy = b.save_pharmacy === "1" ? 1 : 0;
+  if (v.pharmacy_id) {
+    const ph = db.prepare("SELECT * FROM pharmacies WHERE id = ? AND active = 1").get(Number(v.pharmacy_id));
+    if (!ph) v.pharmacy_id = "";
+    else {
+      if (!v.pharmacy) v.pharmacy = pharmacyText(ph).slice(0, 160);
+      if (!v.pharmacy_phone) v.pharmacy_phone = String(ph.phone || ph.fax || "").slice(0, 40);
+    }
+  }
+  // Sig builder: used only when the typed sig is empty.
+  for (const k of ["sig_action", "sig_amount", "sig_unit", "sig_route", "sig_frequency", "sig_for"]) v[k] = str(b[k], 120);
+  const built = buildSig(b);
   const e = {};
+  if (!v.sig && built.sig) v.sig = built.sig;
   if (!v.drug) e.drug = "Enter the medication or supply.";
-  if (!v.sig) e.sig = "Enter the directions (sig).";
+  if (built.amountBad && !str(b.sig)) e.sig_amount = "Enter the sig amount as a number, like 0.5.";
+  if (!v.sig) e.sig = built.given ? "Choose at least an action in the sig builder, or type the directions (sig)." : "Enter the directions (sig).";
   if (!/^\d+(\.\d{1,2})?$/.test(v.quantity) || Number(v.quantity) <= 0 || Number(v.quantity) > 99999) e.quantity = "Enter the quantity as a number.";
   if (!UNITS.includes(v.quantity_unit)) e.quantity_unit = "Choose the unit.";
   if (v.days_supply && (!/^\d{1,3}$/.test(v.days_supply) || Number(v.days_supply) < 1 || Number(v.days_supply) > 365)) e.days_supply = "Days supply is 1 to 365.";
@@ -231,15 +286,19 @@ function rxTab(req, res, patient, { v = null, e = {} } = {}, status = 200) {
           ${writer && r.status === "active" ? html`
             <details class="loc-edit"><summary class="small">Stop</summary>
               <form method="post" action="/ehr/prescriptions/${r.id}/discontinue" class="stack">${csrfField(req)}
-                <label>Reason <input type="text" name="reason" maxlength="300" required placeholder="e.g. dose changed; therapy stopped"></label>
+                <label for="disc_reason_${r.id}">Reason ${O.choice({ name: "reason", id: `disc_reason_${r.id}`, list: DISCONTINUE_REASONS, other: true, required: true, placeholder: "Choose a reason…" })}</label>
                 <button class="btn btn--sm" type="submit">Discontinue</button></form>
               <form method="post" action="/ehr/prescriptions/${r.id}/void" class="stack">${csrfField(req)}
-                <label>Or void (entered in error, never sent) <input type="text" name="reason" maxlength="300" required placeholder="Why"></label>
+                <label for="void_reason_${r.id}">Or void (entered in error, never sent) ${O.choice({ name: "reason", id: `void_reason_${r.id}`, list: VOID_REASONS, other: true, required: true, placeholder: "Why…" })}</label>
                 <button class="btn btn--sm btn--ghost" type="submit">Void</button></form>
             </details>` : ""}
         </td></tr>`;
     })}</tbody></table></div>`;
 
+  const pharmacies = writer ? activePharmacies(db) : [];
+  const dxList = db.prepare("SELECT icd10_code, description FROM diagnoses WHERE patient_id = ? AND status = 'active' ORDER BY is_primary DESC, id")
+    .all(patient.id).map((d) => ({ value: d.icd10_code, label: `${d.icd10_code} · ${d.description}` }));
+  const drugs = writer ? drugSuggestions(db) : [];
   const groups = [...new Set(TEMPLATES.filter((x) => trtOn || x.group !== "Testosterone (TRT)").map((x) => x.group))];
   const form = writer ? html`
     <section class="card" id="write" aria-labelledby="rx-new">
@@ -251,21 +310,36 @@ function rxTab(req, res, patient, { v = null, e = {} } = {}, status = 200) {
         ${csrfField(req)}${errorSummary(e)}
         ${v.renewed_from ? html`<input type="hidden" name="renewed_from" value="${v.renewed_from}">` : ""}
         <div class="form-grid">
-          <label class="span-all">Medication or supply<input type="text" name="drug" maxlength="160" value="${v.drug || ""}" required placeholder="e.g. Testosterone cypionate">${errText(e, "drug")}</label>
+          <label class="span-all">Medication or supply<input type="text" name="drug" maxlength="160" value="${v.drug || ""}" required placeholder="e.g. Testosterone cypionate" list="rx-drug-list" autocomplete="off">${errText(e, "drug")}</label>
+          <datalist id="rx-drug-list">${drugs.map((d) => html`<option value="${d}"></option>`)}</datalist>
           <label>Strength<input type="text" name="strength" maxlength="160" value="${v.strength || ""}" placeholder="200 mg/mL"></label>
           <label for="dosage_form">Form ${O.choice({ name: "dosage_form", list: O.DOSAGE_FORMS, value: v.dosage_form, other: true, placeholder: "Choose the form…" })}</label>
           <label for="route">Route ${O.choice({ name: "route", list: O.MED_ROUTES, value: v.route, other: true, placeholder: "Choose the route…" })}</label>
           <label>Schedule ${select("schedule", SCHEDULES, v.schedule)}${errText(e, "schedule")}</label>
+          <fieldset class="span-all"><legend>Sig builder <span class="hint">(optional; used when the directions box below is empty)</span></legend>
+            <div class="form-grid">
+              <label for="sig_action">Action ${O.choice({ name: "sig_action", list: O.SIG_ACTIONS, value: v.sig_action, placeholder: "Action…" })}</label>
+              <label>Amount<input type="number" step="any" min="0" name="sig_amount" value="${v.sig_amount || ""}" inputmode="decimal" placeholder="0.5">${errText(e, "sig_amount")}</label>
+              <label for="sig_unit">Unit ${O.choice({ name: "sig_unit", list: O.SIG_UNITS, value: v.sig_unit, placeholder: "Unit…" })}</label>
+              <label for="sig_route">Route ${O.choice({ name: "sig_route", list: O.SIG_ROUTES, value: v.sig_route, placeholder: "Route…" })}</label>
+              <label for="sig_frequency">How often ${O.choice({ name: "sig_frequency", list: O.SIG_FREQUENCIES, value: v.sig_frequency, placeholder: "How often…" })}</label>
+              <label>For <span class="hint">(optional)</span><input type="text" name="sig_for" maxlength="120" value="${v.sig_for || ""}" placeholder="e.g. sleep"></label>
+            </div>
+          </fieldset>
           <label class="span-all">Directions (sig)<textarea name="sig" rows="2" maxlength="1000" required>${v.sig || ""}</textarea>${errText(e, "sig")}</label>
           <label>Quantity<input type="number" step="any" min="0" name="quantity" value="${v.quantity || ""}" inputmode="decimal" required>${errText(e, "quantity")}</label>
           <label>Unit ${select("quantity_unit", UNITS.map((x) => ({ value: x, label: x })), v.quantity_unit)}${errText(e, "quantity_unit")}</label>
-          <label>Days supply<input type="number" min="1" max="365" name="days_supply" value="${v.days_supply || ""}" inputmode="numeric">${errText(e, "days_supply")}</label>
+          <label>Days supply<input type="number" min="1" max="365" name="days_supply" value="${v.days_supply || ""}" inputmode="numeric" list="rx-days-supply">${errText(e, "days_supply")}</label>
+          <datalist id="rx-days-supply">${O.DAYS_SUPPLY.map((d) => html`<option value="${d}"></option>`)}</datalist>
           <label>Refills<input type="number" min="0" max="11" name="refills" value="${v.refills || "0"}" inputmode="numeric"><span class="hint">C-II: none · C-III/IV/V: up to 5, within 6 months</span>${errText(e, "refills")}</label>
-          <label>Diagnosis (ICD-10) <span class="hint">(optional)</span><input type="text" name="diagnosis" maxlength="10" value="${v.diagnosis || ""}" placeholder="E29.1">${errText(e, "diagnosis")}</label>
+          <label for="diagnosis">Diagnosis (ICD-10) <span class="hint">(optional)</span> ${O.choice({ name: "diagnosis", list: dxList, value: v.diagnosis || "", other: true, placeholder: dxList.length ? "Choose a diagnosis…" : "None on file (type a code)", otherLabel: "Other ICD-10 code", otherPlaceholder: "e.g. E29.1" })}${errText(e, "diagnosis")}</label>
           <label>Date written<input type="date" name="written_on" value="${v.written_on || t}" readonly>${errText(e, "written_on")}</label>
           <label class="check span-all"><input type="checkbox" name="daw" value="1" ${v.daw ? raw("checked") : ""}> Dispense as written (no generic substitution)</label>
+          <label class="span-all">Saved pharmacy ${select("pharmacy_id", [{ value: "", label: "Other / new pharmacy (type below)" }, ...pharmacies.map((ph) => ({ value: String(ph.id), label: pharmacyLabel(ph) }))], v.pharmacy_id || "")}
+            <span class="hint">A saved pharmacy fills the name, address and phone below when those boxes are empty.</span></label>
           <label>Pharmacy<input type="text" name="pharmacy" maxlength="160" value="${v.pharmacy || ""}" placeholder="Name and address">${errText(e, "pharmacy")}</label>
           <label>Pharmacy phone / fax<input type="tel" name="pharmacy_phone" maxlength="40" value="${v.pharmacy_phone || ""}"></label>
+          <label class="check span-all"><input type="checkbox" name="save_pharmacy" value="1" ${v.save_pharmacy ? raw("checked") : ""}> Save this pharmacy to the clinic list</label>
           <label class="span-all">Note to pharmacist <span class="hint">(optional)</span><input type="text" name="pharmacy_note" maxlength="1000" value="${v.pharmacy_note || ""}"></label>
           <label class="span-all">Send by ${select("delivery", DELIVERY, v.delivery)}${errText(e, "delivery")}
             <span class="hint">Controlled substances can't be sent electronically from here (that needs a DEA-certified EPCS service). Print and sign by hand, fax a hand-signed copy (C-III to C-V), or enter it in your e-prescribing system and record it here.</span></label>
@@ -309,6 +383,7 @@ router.post("/patients/:id/prescriptions", gate((u) => can(u, "clinical:write"))
   const me = prescriberRow(db, req.user.id);
   const prescriberText = `${me.name}${me.credentials ? `, ${me.credentials}` : ""}`;
   let rxId;
+  let savedPharmacyId = null;
   db.exec("BEGIN");
   try {
     const medId = Number(db.prepare(`INSERT INTO medications (patient_id, name, dose, route, frequency, prescriber, start_date, active, notes, created_by)
@@ -318,6 +393,7 @@ router.post("/patients/:id/prescriptions", gate((u) => can(u, "clinical:write"))
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(p.id, req.user.id, v.drug, v.strength || null, v.dosage_form || null, v.route || null, v.sig,
       Number(v.quantity), v.quantity_unit, v.days_supply ? Number(v.days_supply) : null, Number(v.refills || 0), v.schedule, v.daw, v.diagnosis || null, v.pharmacy || null,
       v.pharmacy_phone || null, v.pharmacy_note || null, v.delivery, v.pdmp_checked, v.written_on, medId, v.renewed_from).lastInsertRowid);
+    if (v.save_pharmacy && !v.pharmacy_id && v.pharmacy) savedPharmacyId = savePharmacyFromRx(db, v, req.user.id);
     // Renewing replaces the old prescription.
     if (v.renewed_from) {
       const old = db.prepare("SELECT * FROM prescriptions WHERE id = ? AND patient_id = ? AND status = 'active'").get(v.renewed_from, p.id);
@@ -325,10 +401,22 @@ router.post("/patients/:id/prescriptions", gate((u) => can(u, "clinical:write"))
     }
     db.exec("COMMIT");
   } catch (err) { db.exec("ROLLBACK"); throw err; }
+  if (savedPharmacyId) audit(req, "create", "pharmacy", savedPharmacyId, null);
   audit(req, "sign", "prescription", rxId, p.id, `${v.schedule ? `C-${v.schedule} ` : ""}${v.delivery}`);
   req.flash("success", ["print", "fax"].includes(v.delivery) ? "Prescription signed. Print it and sign by hand." : "Prescription signed and recorded.");
   res.redirect(["print", "fax"].includes(v.delivery) ? `/ehr/prescriptions/${rxId}/print` : `/ehr/patients/${p.id}/prescriptions`);
 });
+
+/** "Save this pharmacy": the typed text is "Name, address"; skips one already on the list. Returns the new id or null. */
+function savePharmacyFromRx(db, v, userId) {
+  const [name, ...rest] = v.pharmacy.split(",");
+  const n = name.trim().slice(0, 160);
+  const address = rest.join(",").trim().slice(0, 300) || null;
+  if (!n) return null;
+  const dup = db.prepare("SELECT id FROM pharmacies WHERE active = 1 AND lower(name) = lower(?) AND lower(coalesce(address, '')) = lower(?)").get(n, address || "");
+  if (dup) return null;
+  return Number(db.prepare("INSERT INTO pharmacies (name, address, phone, created_by) VALUES (?, ?, ?, ?)").run(n, address, v.pharmacy_phone || null, userId).lastInsertRowid);
+}
 
 function endRx(db, rx, status, userId, reason) {
   db.prepare("UPDATE prescriptions SET status = ?, ended_at = datetime('now'), ended_by = ?, end_reason = ? WHERE id = ?").run(status, userId, reason, rx.id);
@@ -346,7 +434,7 @@ for (const [action, status, verb] of [["discontinue", "discontinued", "discontin
     const rx = loadRx(req, res);
     if (!rx) return;
     if (!canWriteRx(req.db, req.user)) return forbidden(req, res);
-    const reason = str((req.body || {}).reason, 300);
+    const reason = O.readChoice(req.body || {}, "reason", { list: action === "void" ? VOID_REASONS : DISCONTINUE_REASONS, other: true, max: 300 }) || "";
     if (rx.status !== "active") { req.flash("info", "That prescription is no longer active."); return res.redirect(`/ehr/patients/${rx.patient_id}/prescriptions`); }
     if (!reason) { req.flash("error", "Enter a reason."); return res.redirect(`/ehr/patients/${rx.patient_id}/prescriptions`); }
     endRx(req.db, rx, status, req.user.id, reason);
@@ -433,6 +521,30 @@ router.get("/prescriptions", gate((u) => can(u, "clinical:read")), (req, res) =>
     for (const r of rows) lines.push([r.written_on, r.id, r.mrn, r.drug, r.strength, r.schedule, fmtQty(r.quantity), r.quantity_unit, r.refills, r.prescriber_name, r.delivery, r.status].map(q).join(","));
     return res.set("content-type", "text/csv; charset=utf-8").set("content-disposition", `attachment; filename="prescriptions-${today()}.csv"`).send(lines.join("\n") + "\n");
   }
+  const manage = canManagePharmacies(db, req.user);
+  const pharmacies = manage ? activePharmacies(db) : [];
+  const pharmacySection = manage ? html`
+    <section class="card" id="pharmacies" aria-labelledby="rx-pharmacies">
+      <div class="card__head"><h2 id="rx-pharmacies">Saved pharmacies</h2><span class="muted small">${pharmacies.length}</span></div>
+      <p class="hint">These show in the "Saved pharmacy" list when writing a prescription.</p>
+      ${pharmacies.length ? html`<div class="table-wrap"><table class="table">
+        <thead><tr><th>Pharmacy</th><th>Phone</th><th>Fax</th><th>NCPDP</th><th></th></tr></thead>
+        <tbody>${pharmacies.map((ph) => html`<tr>
+          <td><strong>${ph.name}</strong>${ph.address ? html`<br><span class="small muted">${ph.address}</span>` : ""}</td>
+          <td>${ph.phone || ""}</td><td>${ph.fax || ""}</td><td>${ph.ncpdp || ""}</td>
+          <td><form method="post" action="/ehr/prescriptions/pharmacies/${ph.id}/remove">${csrfField(req)}<button class="btn btn--sm btn--ghost" type="submit">Remove</button></form></td>
+        </tr>`)}</tbody></table></div>` : html`<p class="muted">No saved pharmacies yet.</p>`}
+      <form method="post" action="/ehr/prescriptions/pharmacies" class="stack">${csrfField(req)}
+        <div class="form-grid">
+          <label>Name<input type="text" name="name" maxlength="160" required></label>
+          <label>Address<input type="text" name="address" maxlength="300" placeholder="Street, city, state ZIP"></label>
+          <label>Phone<input type="tel" name="phone" maxlength="40"></label>
+          <label>Fax<input type="tel" name="fax" maxlength="40"></label>
+          <label>NCPDP ID <span class="hint">(optional)</span><input type="text" name="ncpdp" maxlength="7" inputmode="numeric" pattern="[0-9]{7}"></label>
+        </div>
+        <div class="form-actions"><button class="btn btn--sm btn--primary" type="submit">Add pharmacy</button></div>
+      </form>
+    </section>` : "";
   const qs = (o) => new URLSearchParams({ from, ...(controlled ? { controlled: "1" } : {}), ...(admin && !mine ? { who: "all" } : {}), ...o }).toString();
   res.send(page(req, { title: "Prescriptions", active: "rx", body: html`
     <div class="page-head"><div><h1>Prescriptions</h1><p>${mine ? "Prescriptions you've written" : "Every prescription written at this clinic"} since ${fmtDate(from)}.</p></div>
@@ -451,7 +563,40 @@ router.get("/prescriptions", gate((u) => can(u, "clinical:read")), (req, res) =>
         <td>${rxTitle(r)} ${scheduleBadge(r.schedule)}</td>
         <td class="num">${fmtQty(r.quantity)} ${r.quantity_unit}</td><td>${r.refills}</td>
         <td class="small">${r.prescriber_name}</td><td>${humanize(r.status)}</td></tr>`)}</tbody></table></div>`
-      : html`<p class="muted">No prescriptions in this period.</p>`}</section>` }));
+      : html`<p class="muted">No prescriptions in this period.</p>`}</section>
+    ${pharmacySection}` }));
+});
+
+/* Saved pharmacies: administrators and prescribers manage the clinic list. */
+const canManagePharmacies = (db, user) => can(user, "admin") || canWriteRx(db, user);
+
+router.post("/prescriptions/pharmacies", gate((u) => can(u, "clinical:read")), (req, res) => {
+  const db = req.db;
+  if (!canManagePharmacies(db, req.user)) return forbidden(req, res);
+  const b = req.body || {};
+  const v = { name: str(b.name, 160), address: str(b.address, 300), phone: str(b.phone, 40), fax: str(b.fax, 40), ncpdp: str(b.ncpdp, 7) };
+  const errs = [];
+  if (!v.name) errs.push("Enter the pharmacy name.");
+  if (v.ncpdp && !/^\d{7}$/.test(v.ncpdp)) errs.push("The NCPDP ID is 7 digits.");
+  if (errs.length) { req.flash("error", errs.join(" ")); return res.redirect("/ehr/prescriptions#pharmacies"); }
+  const id = Number(db.prepare("INSERT INTO pharmacies (name, address, phone, fax, ncpdp, created_by) VALUES (?, ?, ?, ?, ?, ?)")
+    .run(v.name, v.address || null, v.phone || null, v.fax || null, v.ncpdp || null, req.user.id).lastInsertRowid);
+  audit(req, "create", "pharmacy", id, null);
+  req.flash("success", `Added ${v.name} to the saved pharmacies.`);
+  res.redirect("/ehr/prescriptions#pharmacies");
+});
+
+router.post("/prescriptions/pharmacies/:phid/remove", gate((u) => can(u, "clinical:read")), (req, res) => {
+  const db = req.db;
+  if (!canManagePharmacies(db, req.user)) return forbidden(req, res);
+  const ph = /^\d+$/.test(req.params.phid) ? db.prepare("SELECT * FROM pharmacies WHERE id = ?").get(Number(req.params.phid)) : null;
+  if (!ph) return notFound(req, res, "Pharmacy");
+  if (ph.active) {
+    db.prepare("UPDATE pharmacies SET active = 0 WHERE id = ?").run(ph.id);
+    audit(req, "update", "pharmacy", ph.id, null);
+  }
+  req.flash("success", `Removed ${ph.name} from the saved pharmacies.`);
+  res.redirect("/ehr/prescriptions#pharmacies");
 });
 
 /* ------------------------------------------------------------------ */

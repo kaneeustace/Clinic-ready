@@ -30,9 +30,24 @@ const CATEGORIES = [
   { value: "photo_id", label: "Photo ID / driver's license" },
   { value: "insurance_front", label: "Insurance card (front)" },
   { value: "insurance_back", label: "Insurance card (back)" },
+  // These kinds are saved as category 'other' (the table's CHECK list is fixed) with the label leading the caption.
+  { value: "wound", label: "Wound / injection site", stored: "other" },
+  { value: "consent_doc", label: "Consent or signed document", stored: "other" },
+  { value: "rx_label", label: "Pharmacy or lab label", stored: "other" },
   { value: "other", label: "Other" },
 ];
-const catLabel = (v) => (CATEGORIES.find((c) => c.value === v) || CATEGORIES[4]).label;
+const OTHER_CAT = CATEGORIES.find((c) => c.value === "other");
+const catLabel = (v) => (CATEGORIES.find((c) => c.value === v && !c.stored) || OTHER_CAT).label;
+/** The label and caption to show for a saved picture (reads the kind back out of an 'other' caption). */
+function kindOf(r) {
+  if (r.category === "other" && r.caption) {
+    for (const c of CATEGORIES.filter((x) => x.stored)) {
+      if (r.caption === c.label) return { label: c.label, caption: "" };
+      if (r.caption.startsWith(`${c.label}: `)) return { label: c.label, caption: r.caption.slice(c.label.length + 2) };
+    }
+  }
+  return { label: catLabel(r.category), caption: r.caption || "" };
+}
 
 /** Sniff the real image type from its first bytes. */
 function sniff(buf) {
@@ -92,12 +107,12 @@ function photosPage(req, res, patient, { error, values = {} } = {}, status = 200
     </section>` : ""}
     <section class="card" aria-labelledby="gal-h">
       <div class="card__head"><h2 id="gal-h">Pictures</h2><span class="muted small">${rows.length} on file</span></div>
-      ${rows.length ? html`<ul class="photo-grid">${rows.map((r) => html`
+      ${rows.length ? html`<ul class="photo-grid">${rows.map((r) => kindOf(r)).map((k, i) => [rows[i], k]).map(([r, k]) => html`
         <li class="photo-card">
-          <a href="${base}/${r.id}" target="_blank" rel="noopener"><img src="${base}/${r.id}" alt="${catLabel(r.category)}${r.caption ? `: ${r.caption}` : ""}" loading="lazy"></a>
+          <a href="${base}/${r.id}" target="_blank" rel="noopener"><img src="${base}/${r.id}" alt="${k.label}${k.caption ? `: ${k.caption}` : ""}" loading="lazy"></a>
           <div class="photo-card__body">
-            <strong>${catLabel(r.category)}</strong>${r.is_profile ? html` <span class="badge badge--info">Profile photo</span>` : ""}
-            ${r.caption ? html`<p>${r.caption}</p>` : ""}
+            <strong>${k.label}</strong>${r.is_profile ? html` <span class="badge badge--info">Profile photo</span>` : ""}
+            ${k.caption ? html`<p>${k.caption}</p>` : ""}
             <p class="muted small">${fmtTimestamp(r.created_at)}${r.uploader ? ` · ${r.uploader}` : ""} · ${Math.max(1, Math.round(r.bytes / 1024))} KB</p>
             ${w ? html`<div class="row">
               ${r.is_profile ? "" : html`<form method="post" action="${base}/${r.id}/profile">${csrfField(req)}<button class="btn btn--sm" type="submit">Use as profile photo</button></form>`}
@@ -119,7 +134,10 @@ router.post("/patients/:id/photos", writePerm, (req, res) => {
   const b = req.body || {};
   const values = { category: String(b.category || ""), caption: String(b.caption || "").trim().slice(0, 200) };
   const fail = (msg) => photosPage(req, res, patient, { error: msg, values }, 400);
-  if (!CATEGORIES.some((c) => c.value === values.category)) return fail("Choose what kind of picture this is.");
+  const kind = CATEGORIES.find((c) => c.value === values.category);
+  if (!kind) return fail("Choose what kind of picture this is.");
+  const category = kind.stored || kind.value;
+  const caption = kind.stored ? (values.caption ? `${kind.label}: ${values.caption}` : kind.label) : values.caption;
   const m = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=\s]+)$/.exec(String(b.image_data || ""));
   if (!m) return fail("Choose a picture to upload (JPEG, PNG or WebP).");
   const buf = Buffer.from(m[2], "base64");
@@ -133,9 +151,9 @@ router.post("/patients/:id/photos", writePerm, (req, res) => {
   try {
     if (makeProfile) req.db.prepare("UPDATE patient_images SET is_profile = 0 WHERE patient_id = ?").run(patient.id);
     const r = req.db.prepare(`INSERT INTO patient_images (patient_id, category, caption, mime, data, bytes, is_profile, uploaded_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(patient.id, values.category, values.caption || null, mime, buf, buf.length, makeProfile ? 1 : 0, req.user.id);
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(patient.id, category, caption || null, mime, buf, buf.length, makeProfile ? 1 : 0, req.user.id);
     req.db.exec("COMMIT");
-    audit(req, "create", "patient_image", Number(r.lastInsertRowid), patient.id, values.category);
+    audit(req, "create", "patient_image", Number(r.lastInsertRowid), patient.id, kind.value);
   } catch (e) { req.db.exec("ROLLBACK"); throw e; }
   req.flash("success", makeProfile ? "Profile photo saved." : "Picture added.");
   res.redirect(`/ehr/patients/${patient.id}/photos`);
