@@ -40,6 +40,7 @@ const { tx } = require("../db");
 const { INSTRUMENTS, isDate, str, intId, errorList } = require("./clinical");
 const { ICD10_COMMON } = require("./patients");
 const { isAhcccs } = require("../payers");
+const O = require("../options");
 const {
   html, raw, esc, page, chartPage, notFound, csrfField, select, getPatient, patientName,
   today, addDays, fmtDate, fmtTimestamp, age, humanize,
@@ -116,6 +117,24 @@ function readModality(b) {
   const m = str(b.modality, 100);
   if (m === "__other") return str(b.modality_other, 100) || null;
   return m || str(b.modality_other, 100) || null;
+}
+/**
+ * Intervention frequency is stored as one string ("Weekly, 53+ minutes (90837)") but entered as two dropdowns.
+ * Split a saved value for the form: the session length is split off only when it is one of the listed lengths;
+ * otherwise the whole old text stays in the frequency box (shown in its "Other" text box if it is not listed).
+ */
+function splitFrequency(saved) {
+  const v = saved == null ? "" : String(saved);
+  if (!v || O.inList(O.PLAN_FREQUENCIES, v)) return { frequency: v, session_length: "" };
+  const i = v.indexOf(", ");
+  if (i > 0 && O.inList(O.SESSION_LENGTHS, v.slice(i + 2))) return { frequency: v.slice(0, i), session_length: v.slice(i + 2) };
+  return { frequency: v, session_length: "" };
+}
+/** Combine the two frequency dropdowns back into the stored string (null when neither is filled in). */
+function readFrequency(b) {
+  const freq = O.readChoice(b, "frequency", { list: O.PLAN_FREQUENCIES, other: true, max: 100 });
+  const len = O.readChoice(b, "session_length", { list: O.SESSION_LENGTHS, other: true, max: 100 });
+  return [freq, len].filter(Boolean).join(", ").slice(0, 100) || null;
 }
 // ASAM Criteria 4th edition dimension names (verify against the licensed ASAM text).
 const ASAM_DIMS = {
@@ -1062,6 +1081,8 @@ function headerForm(req, found, { values, errors = [] }) {
   const notes = safetyNotes(req.db, patient.id);
   const field = ([k, label, rows]) => rows
     ? html`<label class="span-all" for="${k}">${label} ${ta(k, values[k], rows)}</label>`
+    : k === "estimated_duration"
+    ? html`<label for="${k}">${label} ${O.choice({ name: k, list: O.DURATIONS, value: values[k], other: true, placeholder: "Choose a duration…", otherPlaceholder: "e.g. 16-20 sessions over 6 months" })}</label>`
     : html`<label for="${k}">${label} <input id="${k}" name="${k}" value="${values[k] || ""}" maxlength="200"></label>`;
   const lvlOpts = [{ value: "", label: "Not set" }, ...ASAM_LEVELS.map(([k]) => ({ value: k, label: ASAM_LEVEL_LABEL[k] }))];
   return chartPage(req, patient, "plan", html`
@@ -1106,6 +1127,7 @@ function headerForm(req, found, { values, errors = [] }) {
 function validateHeader(db, plan, body) {
   const v = {}, errors = [];
   for (const [k, , rows] of TEXT_FIELDS) v[k] = str(body[k], rows ? 5000 : 200) || null;
+  v.estimated_duration = O.readChoice(body, "estimated_duration", { list: O.DURATIONS, other: true, max: 200 });
   v.plan_type = str(body.plan_type, 20);
   if (!PLAN_TYPES.some((p) => p.value === v.plan_type)) errors.push("Choose a valid plan type.");
   v.start_date = str(body.start_date, 10) || null;
@@ -1397,14 +1419,16 @@ const LEVELS = {
     ownerSql: `SELECT p.plan_id FROM plan_interventions i JOIN plan_objectives o ON o.id = i.objective_id JOIN plan_goals g ON g.id = o.goal_id
       JOIN plan_problems p ON p.id = g.problem_id WHERE i.id = ?`,
     form(ctx, v) {
+      const freq = splitFrequency(v.frequency);
       return html`<div class="form-grid">
         <label for="kind">Kind ${select("kind", INTERVENTION_KINDS, v.kind || "professional")}</label>
         <label for="modality">Modality / evidence-based practice ${modalitySelect(v.modality)}</label>
         <label for="modality_other">If other, which modality? <input id="modality_other" name="modality_other" value="${v.modality && !MODALITIES.includes(MODALITY_ALIASES[v.modality] || v.modality) ? v.modality : ""}" maxlength="100" placeholder="e.g. Somatic experiencing"></label>
         <label class="span-all" for="description">Specific technique or action, and its purpose ${ta("description", v.description, 2, 'required maxlength="2000"')}
           <span class="hint">e.g. "Activity scheduling and monitoring to rebuild routine and increase positive reinforcement."</span></label>
-        <label for="frequency">Frequency <input id="frequency" name="frequency" value="${v.frequency || ""}" maxlength="100" placeholder="e.g. Weekly, 53 min"></label>
-        <label for="duration">Duration <input id="duration" name="duration" value="${v.duration || ""}" maxlength="100" placeholder="e.g. 12 weeks"></label>
+        <label for="frequency">How often ${O.choice({ name: "frequency", list: O.PLAN_FREQUENCIES, value: freq.frequency, other: true, placeholder: "Choose how often…", otherPlaceholder: "e.g. Twice a month" })}</label>
+        <label for="session_length">Session length ${O.choice({ name: "session_length", list: O.SESSION_LENGTHS, value: freq.session_length, other: true, placeholder: "Choose a length…", otherPlaceholder: "e.g. 45 minutes" })}</label>
+        <label for="duration">Duration ${O.choice({ name: "duration", list: O.DURATIONS, value: v.duration, other: true, placeholder: "Choose a duration…", otherPlaceholder: "e.g. 20 sessions" })}</label>
         <label for="responsible_user_id">Responsible staff member ${select("responsible_user_id", [{ value: "", label: "Not a staff member" },
           ...ctx.staff.map((s) => ({ value: s.id, label: `${s.name}${s.credentials ? `, ${s.credentials}` : ""}` }))], v.responsible_user_id)}</label>
         <label for="responsible_text">…or responsible person (not staff) <input id="responsible_text" name="responsible_text" value="${v.responsible_text || ""}" maxlength="200" placeholder="e.g. Client; partner; peer mentor"></label>
@@ -1413,7 +1437,7 @@ const LEVELS = {
     validate(ctx, b) {
       const v = {
         kind: str(b.kind, 20) || "professional", modality: readModality(b), description: str(b.description, 2000),
-        frequency: str(b.frequency, 100) || null, duration: str(b.duration, 100) || null,
+        frequency: readFrequency(b), duration: O.readChoice(b, "duration", { list: O.DURATIONS, other: true, max: 100 }),
         responsible_user_id: str(b.responsible_user_id, 12) || null, responsible_text: str(b.responsible_text, 200) || null,
       };
       const errors = [], warnings = [];
@@ -1425,7 +1449,7 @@ const LEVELS = {
         else v.responsible_user_id = id;
       }
       if (!v.responsible_user_id && !v.responsible_text) errors.push("Name who is responsible: a staff member, or the client, family member or peer.");
-      if (v.kind === "professional" && !v.frequency) warnings.push("Add a frequency (e.g. weekly, 53 min); payers expect amount and frequency of services.");
+      if (v.kind === "professional" && !v.frequency) warnings.push("Add how often and the session length (e.g. Weekly, 53+ minutes); payers expect amount and frequency of services.");
       return { v, errors, warnings };
     },
   },
