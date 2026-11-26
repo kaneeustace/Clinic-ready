@@ -20,6 +20,8 @@ const express = require("express");
 const { forbidden } = require("../auth");
 const { can } = require("../permissions");
 const { audit } = require("../audit");
+const O = require("../options");
+const { getList } = require("../lists");
 const { html, raw, page, chartPage, notFound, csrfField, select, getPatient, patientName, today, addDays, fmtDate, humanize } = require("../views");
 
 const router = express.Router();
@@ -137,7 +139,7 @@ function bannerPill(db, user, patient) {
 /* ------------------------------------------------------------------ */
 
 function readEpisode(b, { requireReason = false } = {}) {
-  const v = { level: str(b.level, 40), asam_level: str(b.asam_level, 10), program: str(b.program, 120), start_date: str(b.start_date, 10),
+  const v = { level: str(b.level, 40), asam_level: str(b.asam_level, 10), program: O.readChoice(b, "program", { other: true, max: 120 }) || "", start_date: str(b.start_date, 10),
     end_date: str(b.end_date, 10), reason: str(b.reason, 1000), change_reason: str(b.change_reason, 40) };
   const e = {};
   if (!LEVEL[v.level]) e.level = "Choose a level of care.";
@@ -152,6 +154,7 @@ function readEpisode(b, { requireReason = false } = {}) {
 function readAuth(b) {
   const v = {};
   for (const k of ["level", "payer", "auth_number", "status", "unit_type", "units_approved", "units_used", "start_date", "end_date", "next_review_date", "reviewer", "notes"]) v[k] = str(b[k], k === "notes" ? 2000 : 120);
+  v.payer = O.readChoice(b, "payer", { other: true, max: 120 }) || "";
   const e = {};
   if (!LEVEL[v.level]) e.level = "Choose the level of care this authorization covers.";
   if (!AUTH_STATUSES.includes(v.status)) e.status = "Choose a status.";
@@ -177,23 +180,38 @@ function errorSummary(e) {
   return list.length ? html`<div class="alert alert--error" role="alert"><strong>Please fix the following:</strong><ul class="list">${list.map((x) => html`<li>${x}</li>`)}</ul></div>` : "";
 }
 
-function episodeFields(v, e, { withEnd = false } = {}) {
+function episodeFields(v, e, { withEnd = false, programs = [], prefix = "ep-" } = {}) {
   return html`
     <label>Level of care ${select("level", levelOptions(), v.level)}${errText(e, "level")}</label>
     <label>ASAM level <span class="hint">(optional)</span>${select("asam_level", asamOptions, v.asam_level)}${errText(e, "asam_level")}</label>
-    <label>Program / track <span class="hint">(optional)</span><input type="text" name="program" maxlength="120" value="${v.program || ""}" placeholder="e.g. Women's IOP, evening group"></label>
+    <label for="${prefix}program">Program / track <span class="hint">(optional)</span>${O.choice({ name: "program", id: `${prefix}program`, list: programs, value: v.program || "", other: true, placeholder: "Not specified", otherPlaceholder: "e.g. Women's IOP, evening group" })}</label>
     <label>Start date<input type="date" name="start_date" value="${v.start_date || ""}" required>${errText(e, "start_date")}</label>
     ${withEnd ? html`<label>End date <span class="hint">(blank = current)</span><input type="date" name="end_date" value="${v.end_date || ""}">${errText(e, "end_date")}</label>` : ""}
     <label class="span-all">Clinical justification <span class="hint">Why this level fits now (ASAM dimensions, risk, response to treatment).</span>
       <textarea name="reason" rows="3" maxlength="1000">${v.reason || ""}</textarea></label>`;
 }
 
-function authFields(v, e, prefix) {
+/** Payer dropdown options: the client's active policies first (primary first), then the standard payer list. */
+function payerList(db, patientId) {
+  const mine = [...new Set(db.prepare("SELECT payer_name FROM insurance_policies WHERE patient_id = ? AND active = 1 ORDER BY priority = 'primary' DESC, id")
+    .all(patientId).map((r) => r.payer_name).filter(Boolean))];
+  const rest = O.PAYERS.map(([g, items]) => [g, items.filter((x) => !mine.includes(x))]).filter(([, items]) => items.length);
+  return mine.length ? [["This client's insurance", mine], ...rest] : rest;
+}
+
+/** Reviewer names saved before for a payer (any client), newest first, distinct, at most 50. All payers when none is given. */
+function reviewersFor(db, payer) {
+  const where = payer ? "payer = ? AND" : "";
+  return db.prepare(`SELECT reviewer FROM loc_authorizations WHERE ${where} reviewer IS NOT NULL AND reviewer <> '' GROUP BY reviewer ORDER BY MAX(id) DESC LIMIT 50`)
+    .all(...(payer ? [payer] : [])).map((r) => r.reviewer);
+}
+
+function authFields(v, e, prefix, { payers = [], reviewers = [] } = {}) {
   const id = (k) => `${prefix}${k}`;
   return html`
     <label>Level ${select("level", levelOptions(), v.level, `id="${id("level")}"`)}${errText(e, "level")}</label>
     <label>Status ${select("status", AUTH_STATUSES.map((s) => ({ value: s, label: humanize(s) })), v.status, `id="${id("status")}"`)}${errText(e, "status")}</label>
-    <label>Payer<input type="text" name="payer" maxlength="120" value="${v.payer || ""}"></label>
+    <label for="${id("payer")}">Payer ${O.choice({ name: "payer", id: id("payer"), list: payers, value: v.payer || "", other: true, placeholder: "Not set", otherPlaceholder: "Payer name" })}</label>
     <label>Authorization #<input type="text" name="auth_number" maxlength="120" value="${v.auth_number || ""}" autocomplete="off"></label>
     <label>Counted in ${select("unit_type", UNIT_TYPES, v.unit_type || "days", `id="${id("unit_type")}"`)}${errText(e, "unit_type")}</label>
     <label>Approved<input type="number" min="0" max="9999" name="units_approved" value="${v.units_approved ?? ""}">${errText(e, "units_approved")}</label>
@@ -201,7 +219,8 @@ function authFields(v, e, prefix) {
     <label>Start date<input type="date" name="start_date" value="${v.start_date || ""}">${errText(e, "start_date")}</label>
     <label>End date<input type="date" name="end_date" value="${v.end_date || ""}">${errText(e, "end_date")}</label>
     <label>Next review<input type="date" name="next_review_date" value="${v.next_review_date || ""}">${errText(e, "next_review_date")}</label>
-    <label>Payer reviewer / contact<input type="text" name="reviewer" maxlength="120" value="${v.reviewer || ""}"></label>
+    <label>Payer reviewer / contact<input type="text" name="reviewer" maxlength="120" value="${v.reviewer || ""}" list="${id("reviewers")}" autocomplete="off">
+      <datalist id="${id("reviewers")}">${reviewers.map((r) => html`<option value="${r}"></option>`)}</datalist></label>
     <label class="span-all">Notes<textarea name="notes" rows="2" maxlength="2000">${v.notes || ""}</textarea></label>`;
 }
 
@@ -218,6 +237,14 @@ function locTab(req, res, patient, { form = null, v = {}, e = {} } = {}, status 
   audit(req, "view", "level_of_care", null, patient.id);
   const t = today();
   const insurer = db.prepare("SELECT payer_name FROM insurance_policies WHERE patient_id = ? AND active = 1 ORDER BY priority = 'primary' DESC LIMIT 1").get(patient.id);
+  const programs = getList(db, "program");
+  const payers = payerList(db, patient.id);
+  const reviewerCache = new Map();
+  const authOpts = (payer) => {
+    const k = payer || "";
+    if (!reviewerCache.has(k)) reviewerCache.set(k, reviewersFor(db, k));
+    return { payers, reviewers: reviewerCache.get(k) };
+  };
 
   const curCard = html`
     <section class="card loc-current" aria-labelledby="loc-cur">
@@ -239,7 +266,7 @@ function locTab(req, res, patient, { form = null, v = {}, e = {} } = {}, status 
             ${csrfField(req)}${form === "episode" ? errorSummary(e) : ""}
             ${cur ? html`<p class="hint">This ends ${levelLabel(cur.level)} the day the new level starts.</p>` : ""}
             <div class="form-grid">
-              ${episodeFields(form === "episode" ? v : { start_date: t, asam_level: "" }, form === "episode" ? e : {})}
+              ${episodeFields(form === "episode" ? v : { start_date: t, asam_level: "" }, form === "episode" ? e : {}, { programs, prefix: "new-ep-" })}
               ${cur ? html`<label>Reason for the change ${select("change_reason", CHANGE_REASONS, form === "episode" ? v.change_reason : "")}${errText(form === "episode" ? e : {}, "change_reason")}</label>` : ""}
             </div>
             <div class="form-actions"><button class="btn btn--primary" type="submit">${cur ? "Change level" : "Admit"}</button></div>
@@ -271,7 +298,7 @@ function locTab(req, res, patient, { form = null, v = {}, e = {} } = {}, status 
           ${ep.end_reason ? html`<p class="small"><span class="muted">Ended:</span> ${reasonLabel([...CHANGE_REASONS, ...DISCHARGE_REASONS], ep.end_reason)}${ep.end_note ? ` · ${ep.end_note}` : ""}</p>` : ""}
           ${canEpisodes(u) ? html`<details class="loc-edit"><summary class="small">Correct this entry</summary>
             <form method="post" action="${base}/level-of-care/${ep.id}/edit" class="stack" novalidate>${csrfField(req)}
-              <div class="form-grid">${episodeFields(form === `edit-${ep.id}` ? v : ep, form === `edit-${ep.id}` ? e : {}, { withEnd: true })}</div>
+              <div class="form-grid">${episodeFields(form === `edit-${ep.id}` ? v : ep, form === `edit-${ep.id}` ? e : {}, { withEnd: true, programs, prefix: `ep${ep.id}-` })}</div>
               ${form === `edit-${ep.id}` ? errorSummary(e) : ""}
               <div class="form-actions"><button class="btn btn--sm" type="submit">Save correction</button></div></form></details>` : ""}
         </li>`)}</ol>` : html`<p class="muted">No levels of care recorded yet.</p>`}
@@ -296,7 +323,7 @@ function locTab(req, res, patient, { form = null, v = {}, e = {} } = {}, status 
           ${canAuth(u) ? html`<tr class="loc-auth-edit"><td colspan="6"><details ${form === `auth-${a.id}` ? raw("open") : ""}><summary class="small">Update this authorization${a.notes ? " · has notes" : ""}</summary>
             <form method="post" action="${base}/authorizations/${a.id}/edit" class="stack" novalidate>${csrfField(req)}
               ${form === `auth-${a.id}` ? errorSummary(e) : ""}
-              <div class="form-grid">${authFields(form === `auth-${a.id}` ? v : a, form === `auth-${a.id}` ? e : {}, `a${a.id}-`)}</div>
+              <div class="form-grid">${authFields(form === `auth-${a.id}` ? v : a, form === `auth-${a.id}` ? e : {}, `a${a.id}-`, authOpts(form === `auth-${a.id}` ? v.payer : a.payer))}</div>
               <div class="form-actions"><button class="btn btn--sm btn--primary" type="submit">Save</button></div></form></details></td></tr>` : ""}`;
         })}</tbody></table></div>` : html`<p class="muted">No authorizations recorded.</p>`}
       ${canAuth(u) ? html`
@@ -305,7 +332,7 @@ function locTab(req, res, patient, { form = null, v = {}, e = {} } = {}, status 
           <form method="post" action="${base}/authorizations" class="stack" novalidate>
             ${csrfField(req)}${form === "auth" ? errorSummary(e) : ""}
             <div class="form-grid">${authFields(form === "auth" ? v : { level: cur ? cur.level : "", status: "pending", unit_type: cur && ["op", "iop", "aftercare", "early"].includes(cur.level) ? "sessions" : "days",
-              start_date: cur ? cur.start_date : "", payer: insurer ? insurer.payer_name : "" }, form === "auth" ? e : {}, "new-")}</div>
+              start_date: cur ? cur.start_date : "", payer: insurer ? insurer.payer_name : "" }, form === "auth" ? e : {}, "new-", authOpts(form === "auth" ? v.payer : insurer ? insurer.payer_name : ""))}</div>
             <div class="form-actions"><button class="btn btn--primary" type="submit">Add authorization</button></div>
           </form>
         </details>` : ""}

@@ -926,3 +926,4 @@ fieldset { background: var(--surface-2); border-color: var(--border); }
 .choice { display: flex; flex-wrap: wrap; gap: .4rem; }
 .choice > select { flex: 1 1 14rem; min-width: 0; }
 .choice > .choice-other { flex: 1 1 12rem; min-width: 0; }
+.checks { display: flex; flex-wrap: wrap; gap: .35rem 1rem; margin: .25rem 0 .5rem; }

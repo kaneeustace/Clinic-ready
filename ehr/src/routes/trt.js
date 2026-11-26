@@ -207,11 +207,60 @@ function errorSummary(e) {
   return list.length ? html`<div class="alert alert--error" role="alert"><strong>Please fix the following:</strong><ul class="list">${list.map((x) => html`<li>${x}</li>`)}</ul></div>` : "";
 }
 const opt = (list, blank = "Select…") => [{ value: "", label: blank }, ...list];
+const arr = (x) => (Array.isArray(x) ? x : x == null || x === "" ? [] : [x]).map((y) => String(y).trim()).filter(Boolean);
+
+/* Side effects: checkboxes from O.TRT_SIDE_EFFECTS plus free-text notes, stored as "A; B — notes". */
+function readSideEffects(b) {
+  const picks = arr(b.side_effect).filter((x) => O.TRT_SIDE_EFFECTS.includes(x));
+  const notes = str(b.side_effects_notes, 600);
+  const legacy = str(b.side_effects, 1000);
+  if (!picks.length && !notes) return legacy;
+  return [picks.join("; "), notes].filter(Boolean).join(" — ").slice(0, 1000);
+}
+function splitSideEffects(text) {
+  const s = String(text || "");
+  const i = s.indexOf(" — ");
+  const head = i >= 0 ? s.slice(0, i) : s;
+  const parts = head.split("; ").map((x) => x.trim()).filter(Boolean);
+  if (parts.length && parts.every((x) => O.TRT_SIDE_EFFECTS.includes(x))) return { picks: parts, notes: i >= 0 ? s.slice(i + 3) : "" };
+  return { picks: [], notes: s };
+}
+
+/* Ancillary meds: a checkbox per O.TRT_ANCILLARY item with an optional dose, plus "Other"; stored as "Anastrozole 0.5 mg twice weekly; hCG 500 IU". */
+const ancShort = (name) => name.replace(/\s*\(.*\)\s*$/, "");
+function readAncillary(b) {
+  if (b.ancillary !== undefined && String(b.ancillary).trim()) return str(b.ancillary, 500);
+  const picked = new Set(arr(b.anc));
+  const parts = [];
+  O.TRT_ANCILLARY.forEach((name, i) => {
+    const dose = str(b[`anc_dose_${i}`], 120);
+    if (picked.has(name) || dose) parts.push([ancShort(name), dose].filter(Boolean).join(" "));
+  });
+  const other = str(b.ancillary_other, 300);
+  if (other) parts.push(other);
+  return parts.join("; ").slice(0, 500);
+}
+function splitAncillary(text) {
+  const items = {};
+  const other = [];
+  for (const part of String(text || "").split(";").map((x) => x.trim()).filter(Boolean)) {
+    const i = O.TRT_ANCILLARY.findIndex((n) => { const sh = ancShort(n); return items[n] === undefined && (part === sh || part === n || part.startsWith(`${sh} `)); });
+    if (i >= 0) { const n = O.TRT_ANCILLARY[i]; items[n] = part === n ? "" : part.slice(ancShort(n).length).trim(); } else other.push(part);
+  }
+  return { items, other: other.join("; ") };
+}
+function ancillaryFields(text) {
+  const { items, other } = splitAncillary(text);
+  return html`<fieldset class="span-all"><legend>Other medications for this program <span class="hint">(optional; tick each and add the dose)</span></legend>
+    <div class="form-grid">${O.TRT_ANCILLARY.map((n, i) => html`<label class="check"><input type="checkbox" name="anc" value="${n}"${items[n] !== undefined ? raw(" checked") : ""}> ${n}
+      <input type="text" name="anc_dose_${i}" maxlength="120" value="${items[n] || ""}" placeholder="dose, e.g. 0.5 mg twice weekly" aria-label="${n} dose"></label>`)}
+      <label class="span-all">Other <input type="text" name="ancillary_other" maxlength="300" value="${other}" placeholder="any other medication, with dose"></label></div></fieldset>`;
+}
 
 function readProgram(b, db) {
-  const v = { status: str(b.status, 20), medication: str(b.medication, 40), route: str(b.route, 20), ancillary: str(b.ancillary, 500),
-    start_date: str(b.start_date, 10), goals: str(b.goals, 1000), stop_reason: str(b.stop_reason, 500), prescriber_id: str(b.prescriber_id, 10),
-    dose_mg: str(b.dose_mg, 12), frequency_days: str(b.frequency_days, 4) };
+  const v = { status: str(b.status, 20), medication: str(b.medication, 40), route: str(b.route, 20), ancillary: readAncillary(b),
+    start_date: str(b.start_date, 10), goals: str(b.goals, 1000), stop_reason: O.readChoice(b, "stop_reason", { list: O.TRT_STOP_REASONS, other: true, max: 500 }) || "",
+    prescriber_id: str(b.prescriber_id, 10), dose_mg: str(b.dose_mg, 12), frequency_days: O.readChoice(b, "frequency_days", { list: O.TRT_FREQ_DAYS, other: true, max: 12 }) || "" };
   const e = {};
   if (!STATUSES.includes(v.status)) e.status = "Choose a status.";
   if (!MED[v.medication]) e.medication = "Choose the medication.";
@@ -250,7 +299,7 @@ function readLabs(b) {
 }
 
 function readVisit(b) {
-  const v = { visit_date: str(b.visit_date, 10), side_effects: str(b.side_effects, 1000) };
+  const v = { visit_date: str(b.visit_date, 10), side_effects: readSideEffects(b) };
   const e = {};
   const vals = {};
   if (!isDate(v.visit_date)) e.visit_date = "Enter the visit date.";
@@ -310,12 +359,12 @@ function trtTab(req, res, patient, { form = null, v = {}, e = {} } = {}, status 
           <label>Medication ${select("medication", opt(MEDICATIONS.map((m) => ({ value: m.value, label: m.label }))), pv.medication)}${errText(fe("program"), "medication")}</label>
           <label>Route ${select("route", ROUTES, pv.route)}${errText(fe("program"), "route")}</label>
           <label>Dose (mg)<input type="number" step="any" min="0" name="dose_mg" value="${pv.dose_mg ?? ""}" inputmode="decimal">${errText(fe("program"), "dose_mg")}</label>
-          <label>Every (days)<input type="number" min="1" max="365" name="frequency_days" value="${pv.frequency_days ?? ""}" inputmode="numeric"><span class="hint">7 = weekly, 14 = every 2 weeks</span>${errText(fe("program"), "frequency_days")}</label>
+          <label for="frequency_days">Every (days) ${O.choice({ name: "frequency_days", list: O.TRT_FREQ_DAYS, value: pv.frequency_days ?? "", other: true, otherLabel: "Other (number of days)", otherPlaceholder: "Days, 1-365" })}<span class="hint">Other = a whole number of days (1-365)</span>${errText(fe("program"), "frequency_days")}</label>
           <label>Start date<input type="date" name="start_date" value="${pv.start_date || ""}">${errText(fe("program"), "start_date")}</label>
           <label>Prescriber ${select("prescriber_id", opt(people.map((p) => ({ value: p.id, label: staffLabel(p) })), "Not set"), pv.prescriber_id)}${errText(fe("program"), "prescriber_id")}</label>
-          <label class="span-all">Other medications for this program <span class="hint">(optional, e.g. an aromatase inhibitor or hCG, with dose)</span><input type="text" name="ancillary" maxlength="500" value="${pv.ancillary || ""}"></label>
+          ${ancillaryFields(pv.ancillary)}
           <label class="span-all">Goals / indication <span class="hint">(symptoms, confirmed low testosterone on two morning draws, shared decision)</span><textarea name="goals" rows="2" maxlength="1000">${pv.goals || ""}</textarea></label>
-          <label class="span-all">If stopped or paused, why<input type="text" name="stop_reason" maxlength="500" value="${pv.stop_reason || ""}">${errText(fe("program"), "stop_reason")}</label>
+          <label class="span-all" for="stop_reason">If stopped or paused, why ${O.choice({ name: "stop_reason", list: O.TRT_STOP_REASONS, value: pv.stop_reason || "", other: true, placeholder: "Not stopped" })}<span class="hint">Required when the status is stopped.</span>${errText(fe("program"), "stop_reason")}</label>
         </div>
         <div class="form-actions"><button class="btn btn--primary" type="submit">${prog ? "Save regimen" : "Start program"}</button></div>
       </form>
@@ -392,7 +441,7 @@ function trtTab(req, res, patient, { form = null, v = {}, e = {} } = {}, status 
           <td>${d.voided_at ? html`<span class="badge badge--neutral" title="${d.void_reason || ""}">Voided</span>` : canWrite(u) ? html`
             <details class="loc-edit"><summary class="small">Void</summary>
               <form method="post" action="${base}/trt/doses/${d.id}/void" class="stack" novalidate>${csrfField(req)}
-                <label>Reason <input type="text" name="void_reason" maxlength="300" required placeholder="e.g. entered on the wrong client"></label>
+                <label for="void_reason_${d.id}">Reason ${O.choice({ name: "void_reason", id: `void_reason_${d.id}`, list: O.TRT_VOID_REASONS, value: form === `void-${d.id}` ? v.void_reason || "" : "", other: true, required: true, placeholder: "Choose a reason…" })}</label>
                 ${form === `void-${d.id}` ? errorSummary(e) : ""}
                 <button class="btn btn--sm" type="submit">Void dose</button>
                 ${d.lot_id ? html`<p class="hint">${ml(d.volume_ml)} goes back on lot ${d.lot_number}.</p>` : ""}
@@ -422,6 +471,7 @@ function trtTab(req, res, patient, { form = null, v = {}, e = {} } = {}, status 
     </section>`;
 
   const vv = fv("visit", { visit_date: t });
+  const vse = splitSideEffects(vv.side_effects);
   const visitsCard = html`
     <section class="card" id="visits" aria-labelledby="trt-visits">
       <div class="card__head"><h2 id="trt-visits">Vitals &amp; symptom check</h2><span class="muted small">0 = worst, 10 = best</span></div>
@@ -446,7 +496,9 @@ function trtTab(req, res, patient, { form = null, v = {}, e = {} } = {}, status 
               <label>Heart rate<input type="number" name="heart_rate" min="20" max="250" value="${vv.heart_rate || ""}" inputmode="numeric">${errText(fe("visit"), "heart_rate")}</label>
               <label>Weight (lb)<input type="number" step="any" name="weight_lb" min="50" max="900" value="${vv.weight_lb || ""}" inputmode="decimal">${errText(fe("visit"), "weight_lb")}</label>
               ${SYMPTOMS.map((x) => html`<label>${x.label} (0–10)<input type="number" name="${x.key}" min="0" max="10" value="${vv[x.key] || ""}" inputmode="numeric">${errText(fe("visit"), x.key)}</label>`)}
-              <label class="span-all">Side effects <span class="hint">(acne, swelling, breast tenderness, sleep apnea symptoms, mood change)</span><textarea name="side_effects" rows="2" maxlength="1000">${vv.side_effects || ""}</textarea></label>
+              <fieldset class="span-all"><legend>Side effects <span class="hint">(tick any reported)</span></legend>
+                <div class="checks">${O.TRT_SIDE_EFFECTS.map((x) => html`<label class="check"><input type="checkbox" name="side_effect" value="${x}"${vse.picks.includes(x) ? raw(" checked") : ""}> ${x}</label>`)}</div>
+                <label>Side effect notes <span class="hint">(optional)</span><input type="text" name="side_effects_notes" maxlength="600" value="${vse.notes}"></label></fieldset>
             </div>
             <div class="form-actions"><button class="btn btn--primary" type="submit">Save visit check</button></div>
           </form>
@@ -558,8 +610,8 @@ router.post("/patients/:id/trt/doses/:did/void", chart, gate(canWrite), (req, re
   const d = db.prepare("SELECT * FROM trt_doses WHERE id = ? AND patient_id = ?").get(Number(req.params.did), p.id);
   if (!d) return notFound(req, res, "Dose");
   if (d.voided_at) { req.flash("info", "That dose was already voided."); return res.redirect(`/ehr/patients/${p.id}/trt#doses`); }
-  const reason = str((req.body || {}).void_reason, 300);
-  if (!reason) return trtTab(req, res, p, { form: `void-${d.id}`, e: { void_reason: "Say why this dose is being voided." } }, 400);
+  const reason = O.readChoice(req.body || {}, "void_reason", { list: O.TRT_VOID_REASONS, other: true, max: 300 });
+  if (!reason) return trtTab(req, res, p, { form: `void-${d.id}`, v: { void_reason: "" }, e: { void_reason: "Say why this dose is being voided." } }, 400);
   db.exec("BEGIN");
   try {
     db.prepare("UPDATE trt_doses SET voided_at = datetime('now'), voided_by = ?, void_reason = ? WHERE id = ?").run(req.user.id, reason, d.id);
@@ -661,6 +713,7 @@ function inventoryPage(req, res, { form = null, v = {}, e = {} } = {}, status = 
   const open = all.filter((l) => !l.closed_at);
   const ledger = ledgerRows(db);
   const people = staff(db).filter((p) => p.id !== u.id);
+  const suppliers = db.prepare("SELECT DISTINCT supplier FROM trt_lots WHERE supplier IS NOT NULL AND TRIM(supplier) <> '' ORDER BY supplier COLLATE NOCASE LIMIT 200").all().map((r) => r.supplier);
   const fe = (n) => (form === n ? e : {});
   const fv = (n, d) => (form === n ? v : d);
   const rv = fv("receive", { received_on: t, product: "", concentration_mg_ml: "" });
@@ -703,7 +756,8 @@ function inventoryPage(req, res, { form = null, v = {}, e = {} } = {}, status = 
           <label>Strength (mg/mL)<input type="number" step="any" min="0" name="concentration_mg_ml" value="${rv.concentration_mg_ml || ""}"><span class="hint">Leave blank to use the listed product's strength.</span>${errText(fe("receive"), "concentration_mg_ml")}</label>
           <label>Amount received (mL)<input type="number" step="any" min="0" name="quantity_ml" value="${rv.quantity_ml || ""}" required><span class="hint">e.g. 10 vials × 1 mL = 10</span>${errText(fe("receive"), "quantity_ml")}</label>
           <label>Date received<input type="date" name="received_on" value="${rv.received_on || ""}" max="${t}">${errText(fe("receive"), "received_on")}</label>
-          <label>Supplier<input type="text" name="supplier" maxlength="120" value="${rv.supplier || ""}"></label>
+          <label>Supplier<input type="text" name="supplier" maxlength="120" value="${rv.supplier || ""}" list="trt-suppliers" autocomplete="off">
+            <datalist id="trt-suppliers">${suppliers.map((x) => html`<option value="${x}"></option>`)}</datalist></label>
           <label>Invoice / DEA 222 # <span class="hint">(optional)</span><input type="text" name="invoice" maxlength="60" value="${rv.invoice || ""}"></label>
         </div>
         <div class="form-actions"><button class="btn btn--primary" type="submit">Add to stock</button></div>
