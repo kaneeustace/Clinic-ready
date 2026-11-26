@@ -17,6 +17,7 @@ const {
   today, nowLocal, addDays, fmtDate, money, parseMoney, humanize,
 } = require("../views");
 const O = require("../options");
+const { ICD10_COMMON } = require("./patients");
 
 const router = express.Router();
 const read = requirePerm("billing:read");
@@ -31,8 +32,9 @@ const TRANSITIONS = {
   void: [],
 };
 const TRANSITION_LABEL = { billed: "Mark billed", paid: "Mark paid", denied: "Mark denied", void: "Void" };
-const METHODS = ["card", "cash", "check", "insurance", "adjustment"];
-const METHOD_LABEL = { card: "Card", cash: "Cash", check: "Check", insurance: "Insurance payment", adjustment: "Adjustment (credit)" };
+const METHODS = O.PAYMENT_METHODS.map((m) => m.value);
+const METHOD_LABEL = { ...Object.fromEntries(O.PAYMENT_METHODS.map((m) => [m.value, m.label])), adjustment: "Adjustment (credit)" };
+const ICD_COMMON_LIST = ICD10_COMMON.map(([code, desc]) => ({ value: code, label: `${code} · ${desc}` }));
 const PAGE_SIZE = 50;
 const CPT_RE = /^(\d{4}[0-9A-Z]|[A-Z]\d{4})$/; // CPT (90837, 0591T) or HCPCS Level II (H0004, T1016)
 const HCPCS_RE = /^[A-Z]\d{4}$/;
@@ -284,14 +286,32 @@ function statusActions(req, charge, back) {
   if (!can(req.user, "billing:write")) return "";
   const next = TRANSITIONS[charge.status] || [];
   if (!next.length) return "";
+  const plain = next.filter((s) => s !== "denied");
+  // "Mark denied" gets its own form so its required denial-reason menu does not block the other buttons.
   return html`
-    <form class="inline-form" method="post" action="/ehr/charges/${charge.id}/status">
+    ${plain.length ? html`<form class="inline-form" method="post" action="/ehr/charges/${charge.id}/status">
       ${csrfField(req)}
       <input type="hidden" name="back" value="${back}">
-      ${next.includes("void") ? html`<input type="hidden" name="confirm" value="yes">` : ""}
-      ${next.map((s) => html`<button class="btn btn--sm ${s === "void" ? "btn--danger" : ""}" type="submit" name="status" value="${s}"
+      ${plain.includes("void") ? html`<input type="hidden" name="confirm" value="yes">` : ""}
+      ${plain.map((s) => html`<button class="btn btn--sm ${s === "void" ? "btn--danger" : ""}" type="submit" name="status" value="${s}"
         ${s === "void" ? raw('data-confirm="Void this charge? Voided charges cannot be changed again."') : ""}>${TRANSITION_LABEL[s]}</button> `)}
-    </form>`;
+    </form>` : ""}
+    ${next.includes("denied") ? html`<form class="inline-form" method="post" action="/ehr/charges/${charge.id}/status">
+      ${csrfField(req)}
+      <input type="hidden" name="back" value="${back}">
+      <label class="visually-hidden" for="denial-${charge.id}">Denial reason</label>
+      ${O.choice({ name: "denial_reason", id: `denial-${charge.id}`, list: O.CARC_REASONS, placeholder: "Denial reason (CARC)…", required: true })}
+      <button class="btn btn--sm" type="submit" name="status" value="denied">${TRANSITION_LABEL.denied}</button>
+    </form>` : ""}`;
+}
+
+/** Denial reason (CARC) shown next to a charge's status. */
+function denialTag(charge) {
+  if (!charge.denial_reason) return "";
+  const label = O.labelFor(O.CARC_REASONS, charge.denial_reason);
+  return charge.status === "denied"
+    ? html` <span class="pill" title="${label}">${label}</span>`
+    : html` <span class="muted small" title="${label}">(earlier denial: ${charge.denial_reason})</span>`;
 }
 
 /* ---------------- dashboard ---------------- */
@@ -389,7 +409,7 @@ router.get("/billing", read, (req, res) => {
                 <td class="num">${money(c.fee_cents)}</td>
                 <td>${providerName(c)}</td>
                 <td>${humanize(c.bill_to)}</td>
-                <td>${badge(c.status)}</td>
+                <td>${badge(c.status)}${denialTag(c)}</td>
                 <td>${statusActions(req, c, back)}</td>
               </tr>`)}</tbody>
           </table></div>` : ""}
@@ -508,7 +528,7 @@ function ledgerPage(req, res, patient, { errors = {}, values = {}, status = 200 
   const queue = unchargedAppointments(db, { patientId: patient.id, limit: 20 });
   const writer = can(req.user, "billing:write");
   const back = `/ehr/patients/${patient.id}/billing`;
-  const v = { amount: "", method: "card", reference: "", received_on: today(), note: "", ...values };
+  const v = { amount: "", method: "card", adjustment_type: "", reference: "", received_on: today(), note: "", ...values };
 
   if (status === 200) audit(req, "view", "charge", null, patient.id, "ledger");
   res.status(status).send(chartPage(req, patient, "billing", html`
@@ -559,12 +579,12 @@ function ledgerPage(req, res, patient, { errors = {}, values = {}, status = 200 
               <td class="num">${r.c.status === "void" ? html`<s>${money(r.c.fee_cents)}</s>` : money(r.c.fee_cents)}</td>
               <td class="num"></td>
               <td class="num">${money(r.balance)}</td>
-              <td>${badge(r.c.status)}</td>
+              <td>${badge(r.c.status)}${denialTag(r.c)}</td>
               <td>${statusActions(req, r.c, back)}</td>
             </tr>` : html`
             <tr>
               <td>${fmtDate(r.date)}</td>
-              <td>${METHOD_LABEL[r.p.method] || humanize(r.p.method)}</td>
+              <td>${METHOD_LABEL[r.p.method] || humanize(r.p.method)}${r.p.adjustment_type ? html` <span class="muted small">· ${r.p.adjustment_type}</span>` : ""}</td>
               <td class="small">${r.p.reference ? `Ref ${r.p.reference}` : ""}${r.p.note ? ` · ${r.p.note}` : ""}</td>
               <td class="num"></td>
               <td class="num">${money(r.p.amount_cents)}</td>
@@ -582,8 +602,9 @@ function ledgerPage(req, res, patient, { errors = {}, values = {}, status = 200 
           ${csrfField(req)}
           <div class="form-grid">
             <label>Amount ($) <input name="amount" value="${v.amount}" inputmode="decimal" required> ${fieldError(errors, "amount")}</label>
-            <label>Method ${select("method", METHODS.map((m) => ({ value: m, label: METHOD_LABEL[m] })), v.method)} ${fieldError(errors, "method")}</label>
-            <label>Reference <input name="reference" value="${v.reference}" maxlength="60" placeholder="Check # or transaction ID"> ${fieldError(errors, "reference")}</label>
+            <label>Method ${O.choice({ name: "method", list: O.PAYMENT_METHODS, value: v.method, placeholder: "Choose a method", required: true })} ${fieldError(errors, "method")}</label>
+            <label>Adjustment type ${O.choice({ name: "adjustment_type", list: O.ADJUSTMENT_TYPES, value: v.adjustment_type, other: true, placeholder: "Not an adjustment" })}<span class="hint">Required when the method is Adjustment.</span> ${fieldError(errors, "adjustment_type")}</label>
+            <label>Reference <input name="reference" value="${v.reference}" maxlength="60" placeholder="Check or EFT number"><span class="hint">Check number, EFT trace number or transaction ID.</span> ${fieldError(errors, "reference")}</label>
             <label>Received on <input type="date" name="received_on" value="${v.received_on}" required> ${fieldError(errors, "received_on")}</label>
             <label class="span-all">Note <input name="note" value="${v.note}" maxlength="200"><span class="hint">Billing note only. Do not enter clinical information.</span></label>
           </div>
@@ -604,19 +625,22 @@ router.post("/patients/:id/payments", write, (req, res) => {
   const values = {
     amount: str(req.body.amount, 20), method: str(req.body.method, 20), reference: str(req.body.reference, 60),
     received_on: str(req.body.received_on, 10), note: str(req.body.note, 200),
+    adjustment_type: O.readChoice(req.body, "adjustment_type", { list: O.ADJUSTMENT_TYPES, other: true, max: 60 }) || "",
   };
   const errors = {};
   const amount = parseMoney(values.amount);
   if (amount === null || amount <= 0) errors.amount = "Amount must be greater than $0.";
   else if (amount > 10000000) errors.amount = "Amount is too large.";
-  if (!METHODS.includes(values.method)) errors.method = "Choose a payment method.";
+  if (!O.inList(O.PAYMENT_METHODS, values.method)) errors.method = "Choose a payment method.";
+  else if (values.method === "adjustment" && !values.adjustment_type) errors.adjustment_type = "Choose an adjustment type.";
+  const adjType = values.method === "adjustment" ? values.adjustment_type : null;
   if (!validDate(values.received_on)) errors.received_on = "Enter a valid received date.";
   else if (values.received_on > today()) errors.received_on = "Received date cannot be in the future.";
   if (Object.keys(errors).length) return ledgerPage(req, res, patient, { errors, values, status: 400 });
   const id = Number(req.db.prepare(
-    `INSERT INTO payments (patient_id, amount_cents, method, reference, received_on, note, entered_by) VALUES (?, ?, ?, ?, ?, ?, ?)`)
-    .run(patient.id, amount, values.method, values.reference || null, values.received_on, values.note || null, req.user.id).lastInsertRowid);
-  audit(req, "create", "payment", id, patient.id, `method ${values.method}`);
+    `INSERT INTO payments (patient_id, amount_cents, method, adjustment_type, reference, received_on, note, entered_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(patient.id, amount, values.method, adjType, values.reference || null, values.received_on, values.note || null, req.user.id).lastInsertRowid);
+  audit(req, "create", "payment", id, patient.id, `method ${values.method}${adjType ? ` (${adjType})` : ""}`);
   req.flash("success", `${values.method === "adjustment" ? "Adjustment" : "Payment"} of ${money(amount)} recorded.`);
   res.redirect(`/ehr/patients/${patient.id}/billing`);
 });
@@ -646,10 +670,10 @@ function chargeForm(req, res, patient, { values = {}, errors = {}, appt = null, 
     rendering_provider_id: provId || "", cpt_code: cpt,
     units: TIMED_15.has(cpt) && mins ? String(unitsFor15(mins) || 1) : "1", fee: "", modifier: sugg.modifiers.join(" "),
     pos: notePos || (appt && appt.modality === "in_person" ? "11" : ""), minutes: mins != null ? String(mins) : "", note_id: noteId || "",
-    bill_to: hasPolicy ? "insurance" : "patient", dx_other: "", ...values,
+    bill_to: hasPolicy ? "insurance" : "patient", dx_other: "", dx_common: "", ...values,
   };
   const modSlots = parseModifiers(v.modifier);
-  const dxDefault = !values.dx && !values.dx_other; // first render: all active diagnoses checked
+  const dxDefault = !values.dx && !values.dx_other && !values.dx_common; // first render: all active diagnoses checked
   const noteLabel = (n) => `${humanize(n.type)} · ${fmtDate(n.service_date || String(n.signed_at || "").slice(0, 10))} · ${n.status === "signed" ? "signed" : "UNSIGNED draft"}`;
 
   res.status(status).send(chartPage(req, patient, "billing", html`
@@ -685,7 +709,8 @@ function chargeForm(req, res, patient, { values = {}, errors = {}, appt = null, 
           <label class="check"><input type="checkbox" name="dx" value="${d.icd10_code}" ${dxDefault || selectedDx.has(d.icd10_code) ? raw("checked") : ""}>
             ${d.icd10_code} · ${d.description}${d.is_primary ? html` <span class="pill">Primary</span>` : ""}</label>`)
           : html`<p class="muted small">No active diagnoses on the problem list.</p>`}
-        <label style="margin-top:.5rem">Other ICD-10 codes <input name="dx_other" value="${v.dx_other}" placeholder="e.g. F41.1, Z63.0"><span class="hint">Comma-separated. Used in addition to the codes checked above.</span> ${fieldError(errors, "dx")}</label>
+        <label style="margin-top:.5rem">Add a common code ${O.choice({ name: "dx_common", id: "dx_common", list: ICD_COMMON_LIST, value: v.dx_common, placeholder: "None" })}<span class="hint">Optional. Adds one more code from the common behavioral health list.</span></label>
+        <label style="margin-top:.5rem">Other codes <input name="dx_other" value="${v.dx_other}" placeholder="e.g. F41.1, Z63.0"><span class="hint">ICD-10 codes, comma-separated. Used in addition to the codes chosen above.</span> ${fieldError(errors, "dx")}</label>
       </fieldset>
       <div class="form-actions"><button class="btn btn--primary" type="submit">Create charge</button></div>
     </form>`, { title: "New charge" }));
@@ -717,7 +742,7 @@ router.post("/patients/:id/charges", write, (req, res) => {
   const values = {
     date_of_service: str(b.date_of_service, 10), cpt_code: str(b.cpt_code, 10).toUpperCase(), modifier: modifiersFromBody(b),
     units: str(b.units, 4), fee: str(b.fee, 20), rendering_provider_id: str(b.rendering_provider_id, 10),
-    bill_to: str(b.bill_to, 10), dx: dxChecked, dx_other: str(b.dx_other, 200),
+    bill_to: str(b.bill_to, 10), dx: dxChecked, dx_other: str(b.dx_other, 200), dx_common: str(b.dx_common, 10).toUpperCase(),
     pos: str(b.pos, 2), minutes: str(b.minutes, 5), note_id: str(b.note_id, 12),
   };
   const errors = {};
@@ -769,7 +794,7 @@ router.post("/patients/:id/charges", write, (req, res) => {
   // Diagnosis codes: checked active diagnoses in problem-list order (primary first), then free text.
   const dxOrder = activeDiagnoses(db, patient.id).map((d) => d.icd10_code.toUpperCase());
   const checked = dxOrder.filter((c) => dxChecked.includes(c));
-  const extra = values.dx_other.split(/[\s,;]+/).map((s) => s.trim().toUpperCase()).filter(Boolean);
+  const extra = [values.dx_common, ...values.dx_other.split(/[\s,;]+/)].map((s) => s.trim().toUpperCase()).filter(Boolean);
   const badDx = [...dxChecked.filter((c) => !dxOrder.includes(c)), ...extra.filter((c) => !ICD_RE.test(c))];
   if (badDx.length) errors.dx = `Not a valid ICD-10 code: ${badDx.join(", ")}`;
   const codes = [...new Set([...checked, ...extra])];
@@ -806,6 +831,11 @@ router.post("/charges/:chargeId/status", write, (req, res) => {
   if (charge.status === "void") return bad("Voided charges cannot be changed.");
   if (!(TRANSITIONS[charge.status] || []).includes(to)) return bad(`A ${charge.status} charge cannot be marked ${humanize(to).toLowerCase() || "that status"}.`);
   if (to === "void" && req.body.confirm !== "yes") return bad("Voiding a charge requires confirmation.");
+  let denialReason = null;
+  if (to === "denied") {
+    denialReason = O.readChoice(req.body, "denial_reason", { list: O.CARC_REASONS });
+    if (!denialReason) return bad("Choose a denial reason (CARC code) to mark a charge denied.");
+  }
   if (to === "billed" && isAhcccs(db, charge.patient_id)) {
     const patient = db.prepare("SELECT * FROM patients WHERE id = ?").get(charge.patient_id);
     const errs = ahcccsBillErrors(db, charge, patient);
@@ -814,9 +844,11 @@ router.post("/charges/:chargeId/status", write, (req, res) => {
       return bad(errs);
     }
   }
-  const r = db.prepare("UPDATE charges SET status = ? WHERE id = ? AND status = ?").run(to, charge.id, charge.status);
+  const r = to === "denied"
+    ? db.prepare("UPDATE charges SET status = ?, denial_reason = ? WHERE id = ? AND status = ?").run(to, denialReason, charge.id, charge.status)
+    : db.prepare("UPDATE charges SET status = ? WHERE id = ? AND status = ?").run(to, charge.id, charge.status);
   if (r.changes !== 1) return bad("The charge changed while you were working. Reload and try again.");
-  audit(req, to === "void" ? "void" : "update", "charge", charge.id, charge.patient_id, `status ${charge.status} -> ${to}`);
+  audit(req, to === "void" ? "void" : "update", "charge", charge.id, charge.patient_id, `status ${charge.status} -> ${to}${denialReason ? ` (${denialReason})` : ""}`);
   req.flash("success", `Charge ${to === "void" ? "voided" : `marked ${to}`}.`);
   res.redirect(back);
 });

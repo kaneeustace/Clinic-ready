@@ -110,7 +110,7 @@ test("ledger balance math with payments, adjustments and void", async () => {
 
   let r = await c.post(`/ehr/patients/${pid}/payments`, { amount: "$25.00", method: "card", reference: "T1", received_on: "2026-02-02" });
   assert.equal(r.status, 302);
-  r = await c.post(`/ehr/patients/${pid}/payments`, { amount: "10.50", method: "adjustment", received_on: "2026-02-03" });
+  r = await c.post(`/ehr/patients/${pid}/payments`, { amount: "10.50", method: "adjustment", adjustment_type: "Write-off", received_on: "2026-02-03" });
   assert.equal(r.status, 302);
   assert.equal(balance(pid), start + 13500 - 2500 - 1050);
   assert.ok(t.db.prepare("SELECT 1 FROM audit_log WHERE action = 'create' AND entity_type = 'payment' AND patient_id = ?").get(pid));
