@@ -236,7 +236,108 @@ const TRT_WASTE_REASONS = ["Expired", "Damaged / dropped / broken vial", "Partia
 const TRT_ADJUST_REASONS = ["Recount / counting error", "Data entry correction", "Overfill found in vial", "Spill or breakage not witnessed",
   "Suspected theft or loss (report to DEA, Form 106)", "Other"];
 
+
+/* ------------------------------------------------------------------ */
+/* Second wave                                                         */
+/* ------------------------------------------------------------------ */
+
+// Patients
+const ALLERGY_TYPES = [{ value: "drug", label: "Drug / medication" }, { value: "food", label: "Food" }, { value: "environmental", label: "Environmental (pollen, pets…)" },
+  { value: "latex", label: "Latex" }, { value: "other", label: "Other" }];
+const ALLERGY_REACTIONS = ["Rash", "Hives", "Itching", "Swelling / angioedema", "Anaphylaxis", "Shortness of breath / wheezing", "Nausea / vomiting", "Diarrhea",
+  "Dizziness / fainting", "Headache", "Intolerance (not allergic)", "Unknown"];
+const CONTACT_RELATIONSHIPS = ["Spouse / partner", "Parent", "Child", "Sibling", "Grandparent", "Other relative", "Legal guardian", "Friend", "Roommate",
+  "Case manager", "Sponsor", "Other"];
+// X12 837 individual relationship codes (subscriber relationship to the patient).
+const SUBSCRIBER_RELATIONSHIPS = [{ value: "self", label: "18 · Self" }, { value: "spouse", label: "01 · Spouse" }, { value: "child", label: "19 · Child" },
+  { value: "life_partner", label: "53 · Life partner" }, { value: "employee", label: "20 · Employee" }, { value: "guardian", label: "G8 · Other relationship (e.g. guardian)" },
+  { value: "other", label: "G8 · Other relationship" }, { value: "unknown", label: "21 · Unknown" }];
+const PRONOUNS = ["she/her", "he/him", "they/them", "she/they", "he/they", "ze/zir", "Use my name", "Prefer not to say"];
+const GENDER_IDENTITIES = ["Female", "Male", "Transgender female / trans woman", "Transgender male / trans man", "Non-binary", "Genderqueer / gender fluid",
+  "Two-spirit", "Questioning", "Prefer not to say"];
+
+// Prescriptions
+const RX_DISCONTINUE_REASONS = ["Dose change", "Side effects", "Not effective", "Course completed", "Client request", "Switched to another medication",
+  "Cost or insurance", "Drug interaction", "Pregnancy / breastfeeding", "Lab results", "Other"];
+const RX_VOID_REASONS = ["Wrong client", "Wrong drug", "Wrong dose or quantity", "Duplicate entry", "Written in error / never sent", "Other"];
+const DAYS_SUPPLY = ["7", "14", "28", "30", "60", "84", "90"];
+const SIG_ACTIONS = ["Take", "Inject", "Apply", "Place", "Use", "Inhale", "Insert"];
+const SIG_UNITS = ["tablet(s)", "capsule(s)", "mL", "mg", "pump(s)", "patch(es)", "puff(s)", "spray(s)", "unit(s)"];
+const SIG_ROUTES = ["by mouth", "under the tongue", "into the muscle", "under the skin", "to the skin", "into each nostril", "by inhalation"];
+const SIG_FREQUENCIES = ["once daily", "twice daily", "three times daily", "four times daily", "every morning", "at bedtime", "every other day", "once weekly",
+  "every 2 weeks", "every 4 weeks", "as needed"];
+
+// Treatment plans
+const OBJECTIVE_UNITS = ["points (score)", "times per week", "times per day", "days per week", "% of days", "hours per night", "sessions attended",
+  "days abstinent", "panic attacks per week", "minutes per day", "out of 10 (self-rating)"];
+const MEASURE_METHODS = ["Standardized measure in session", "Client self-report", "Client log / diary", "Clinician observation", "Collateral report (family, school)",
+  "Lab / drug screen", "Attendance records", "Pharmacy / refill records"];
+const MEASURE_FREQUENCIES = ["Every session", "Weekly", "Every 2 weeks", "Monthly", "At each plan review"];
+const RESPONSIBLE_PEOPLE = ["Client", "Parent / guardian", "Spouse / partner", "Family member", "Peer support specialist", "Sponsor", "Case manager (outside agency)",
+  "Primary care provider", "Outside prescriber", "School staff"];
+const REVIEW_DAYS = [{ value: "30", label: "Every 30 days" }, { value: "60", label: "Every 60 days" }, { value: "90", label: "Every 90 days" },
+  { value: "180", label: "Every 6 months" }, { value: "365", label: "Every 12 months" }];
+const PROGRAM_LEVELS = ["Outpatient (OP)", "Intensive outpatient (IOP)", "Partial hospitalization (PHP)", "Residential", "Inpatient", "Withdrawal management",
+  "Supportive housing", "Early intervention", "Aftercare"];
+const SIGNATURE_DECLINED = ["Client refused to sign", "Unable to sign due to symptoms or capacity", "Not present (telehealth / remote review)", "Guardian not available",
+  "Language barrier, no interpreter available", "Will sign at next visit", "Other"];
+const REVIEW_PARTICIPANTS = ["Client", "Parent / guardian", "Family member", "Prescriber", "Case manager", "Peer support specialist", "Outside provider"];
+
+// Notes
+const DISCHARGE_STATUS = ["Improved", "Stable", "Unchanged", "Worsened", "Unknown (lost to follow-up)"];
+const CALOCUS_LEVELS = [{ value: "0", label: "Level 0 · Basic services" }, { value: "1", label: "Level 1 · Recovery maintenance and health management" },
+  { value: "2", label: "Level 2 · Low-intensity community-based services" }, { value: "3", label: "Level 3 · High-intensity community-based services" },
+  { value: "4", label: "Level 4 · Medically monitored non-residential" }, { value: "5", label: "Level 5 · Medically monitored residential" },
+  { value: "6", label: "Level 6 · Medically managed residential" }];
+const ROI_PURPOSES = ["Coordination of care", "Continuity of care / referral", "Family involvement in treatment", "Insurance / payment", "Legal / court",
+  "School", "Employer / disability", "At the client's request", "Other"];
+const COPY_GIVEN = ["Printed copy given", "Sent electronically / photo", "Client declined a copy", "Not given (will provide)"];
+const LANGUAGES = ["English", "Spanish", "Navajo", "Apache", "Tohono O'odham", "Vietnamese", "Chinese (Mandarin)", "Chinese (Cantonese)", "Arabic", "Tagalog",
+  "Korean", "Russian", "French", "American Sign Language (ASL)"];
+
+// Hormone therapy
+const TRT_SIDE_EFFECTS = ["None reported", "Acne / oily skin", "Swelling / edema", "Breast tenderness / gynecomastia", "Mood changes / irritability",
+  "Sleep apnea symptoms / snoring", "Injection site reaction", "Hair loss", "Reduced testicular size", "Headache", "Elevated blood pressure"];
+const TRT_STOP_REASONS = ["Client choice", "Hematocrit too high", "PSA high or rising", "Side effects", "Cost / insurance", "Fertility plans",
+  "Symptoms resolved / not helpful", "Lost to follow-up", "Transferred care", "Other"];
+const TRT_ANCILLARY = ["Anastrozole", "hCG (human chorionic gonadotropin)", "Enclomiphene", "Clomiphene", "Finasteride"];
+const TRT_VOID_REASONS = ["Wrong client", "Duplicate entry", "Wrong date or dose entered", "Dose not actually given", "Other"];
+const TRT_FREQ_DAYS = [{ value: "3", label: "Every 3-4 days (twice weekly)" }, { value: "7", label: "Weekly (7 days)" }, { value: "10", label: "Every 10 days" },
+  { value: "14", label: "Every 2 weeks (14 days)" }, { value: "21", label: "Every 3 weeks" }, { value: "28", label: "Every 4 weeks" },
+  { value: "1", label: "Daily (gel / topical)" }, { value: "90", label: "Every 3 months (pellets)" }];
+
+// Billing
+const PAYMENT_METHODS = [{ value: "card", label: "Card" }, { value: "cash", label: "Cash" }, { value: "check", label: "Check" }, { value: "ach", label: "Bank transfer (ACH)" },
+  { value: "insurance_eft", label: "Insurance payment (EFT)" }, { value: "insurance_check", label: "Insurance payment (check)" }, { value: "insurance", label: "Insurance (other)" },
+  { value: "adjustment", label: "Adjustment (no money received)" }];
+const ADJUSTMENT_TYPES = ["Contractual adjustment", "Write-off", "Small-balance write-off", "Courtesy / hardship discount", "Bad debt", "Refund to client",
+  "Refund to payer", "Correction"];
+const CARC_REASONS = [{ value: "CO-4", label: "CO-4 · Procedure code inconsistent with modifier" }, { value: "CO-11", label: "CO-11 · Diagnosis inconsistent with procedure" },
+  { value: "CO-16", label: "CO-16 · Missing or invalid claim information" }, { value: "CO-18", label: "CO-18 · Duplicate claim" },
+  { value: "CO-22", label: "CO-22 · Covered by another payer (COB)" }, { value: "CO-27", label: "CO-27 · Coverage terminated" },
+  { value: "CO-29", label: "CO-29 · Timely filing limit passed" }, { value: "CO-50", label: "CO-50 · Not medically necessary" },
+  { value: "CO-96", label: "CO-96 · Non-covered charge" }, { value: "CO-97", label: "CO-97 · Included in another service (bundled)" },
+  { value: "CO-109", label: "CO-109 · Not covered by this payer" }, { value: "CO-119", label: "CO-119 · Benefit maximum reached" },
+  { value: "CO-167", label: "CO-167 · Diagnosis not covered" }, { value: "CO-170", label: "CO-170 · Not paid for this provider type" },
+  { value: "CO-197", label: "CO-197 · Prior authorization missing" }, { value: "CO-242", label: "CO-242 · Provider not in network" },
+  { value: "PR-1", label: "PR-1 · Deductible" }, { value: "PR-2", label: "PR-2 · Coinsurance" }, { value: "PR-3", label: "PR-3 · Copay" },
+  { value: "OTHER", label: "Other (see note)" }];
+
+// Records, portal, website, pictures
+const RELEASED_TO = ["The client", "Personal representative / guardian", "Someone the client named (designee)", "Attorney", "Other"];
+const MAIN_CONCERNS = ["Anxiety or stress", "Depression or low mood", "Trauma / PTSD", "Relationship or family", "Substance use", "ADHD / focus",
+  "Grief or loss", "Medication management", "Child or teen concerns", "Something else"];
+const APPT_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const APPT_TIMES = ["Mornings (8-12)", "Afternoons (12-5)", "Evenings (after 5)"];
+const VISIT_PREFS = ["In person", "Video (telehealth)", "Either"];
+const STAFF_MESSAGE_TEMPLATES = ["Appointment reminder", "Forms to complete", "Follow-up from your session", "Billing notice", "Prescription update", "General message"];
+
 module.exports = {
+  ALLERGY_TYPES, ALLERGY_REACTIONS, CONTACT_RELATIONSHIPS, SUBSCRIBER_RELATIONSHIPS, PRONOUNS, GENDER_IDENTITIES,
+  RX_DISCONTINUE_REASONS, RX_VOID_REASONS, DAYS_SUPPLY, SIG_ACTIONS, SIG_UNITS, SIG_ROUTES, SIG_FREQUENCIES,
+  OBJECTIVE_UNITS, MEASURE_METHODS, MEASURE_FREQUENCIES, RESPONSIBLE_PEOPLE, REVIEW_DAYS, PROGRAM_LEVELS, SIGNATURE_DECLINED, REVIEW_PARTICIPANTS,
+  DISCHARGE_STATUS, CALOCUS_LEVELS, ROI_PURPOSES, COPY_GIVEN, LANGUAGES, TRT_SIDE_EFFECTS, TRT_STOP_REASONS, TRT_ANCILLARY, TRT_VOID_REASONS, TRT_FREQ_DAYS,
+  PAYMENT_METHODS, ADJUSTMENT_TYPES, CARC_REASONS, RELEASED_TO, MAIN_CONCERNS, APPT_DAYS, APPT_TIMES, VISIT_PREFS, STAFF_MESSAGE_TEMPLATES,
   OTHER, choice, readChoice, inList, labelFor, flat,
   STATES, STATE_CODES, stateChoice, PAYERS, MED_ROUTES, MED_FREQUENCIES, DOSAGE_FORMS, CREDENTIALS, POS, MODIFIERS, BH_CODES,
   MSE_OPTIONS, CONTACT_WHO, CONTACT_HOW, DISCHARGE_REASONS, PLAN_FREQUENCIES, SESSION_LENGTHS, DURATIONS,

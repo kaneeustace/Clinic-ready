@@ -29,6 +29,7 @@ function migrate(db, schema) {
     ["notes", "'supportive_housing'", 2, ["CREATE INDEX IF NOT EXISTS idx_notes_patient ON notes(patient_id, created_at);"]],
     ["assessments", "'ASRS'", 1, ["CREATE INDEX IF NOT EXISTS idx_assess_patient ON assessments(patient_id, instrument, administered_on);"]],
     ["fhir_auth_codes", "portal_account_id", 1, []],
+    ["payments", "'insurance_eft'", 1, []],
   ];
   // Columns added after first release (ALTER TABLE ADD COLUMN is safe and instant in SQLite).
   const ADD_COLUMNS = {
@@ -86,7 +87,14 @@ function migrate(db, schema) {
       ["cosigned_by", "INTEGER REFERENCES users(id)"],
       ["cosigned_at", "TEXT"],
     ],
+    allergies: [
+      ["allergy_type", "TEXT"],                // drug | food | environmental | latex | other
+    ],
+    payments: [
+      ["adjustment_type", "TEXT"],             // contractual, write-off, refund... (when method = adjustment)
+    ],
     charges: [
+      ["denial_reason", "TEXT"],               // CARC code when a claim is denied, e.g. CO-16
       ["pos", "TEXT"],                        // place of service (member's location for telehealth under AHCCCS)
       ["minutes", "INTEGER"],                 // documented minutes supporting time-based units
       ["note_id", "INTEGER REFERENCES notes(id)"],

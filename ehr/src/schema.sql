@@ -240,7 +240,7 @@ CREATE TABLE IF NOT EXISTS payments (
   id INTEGER PRIMARY KEY,
   patient_id INTEGER NOT NULL REFERENCES patients(id) ON DELETE CASCADE,
   amount_cents INTEGER NOT NULL,
-  method TEXT NOT NULL CHECK (method IN ('card','cash','check','insurance','adjustment')),
+  method TEXT NOT NULL CHECK (method IN ('card','cash','check','ach','insurance','insurance_eft','insurance_check','adjustment')),
   reference TEXT,
   received_on TEXT NOT NULL,
   note TEXT,
@@ -844,3 +844,26 @@ CREATE TABLE IF NOT EXISTS portal_messages (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_portal_messages_patient ON portal_messages(patient_id, created_at);
+
+-- Saved pharmacies for prescriptions (routes/rx.js). Clinic-wide list.
+CREATE TABLE IF NOT EXISTS pharmacies (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  address TEXT,
+  phone TEXT,
+  fax TEXT,
+  ncpdp TEXT,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_by INTEGER REFERENCES users(id),
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+-- Clinic-managed pick lists (src/lists.js): rooms/locations, programs/tracks, therapy groups.
+CREATE TABLE IF NOT EXISTS clinic_lists (
+  id INTEGER PRIMARY KEY,
+  kind TEXT NOT NULL CHECK (kind IN ('room', 'program', 'group')),
+  label TEXT NOT NULL,
+  sort INTEGER NOT NULL DEFAULT 0,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (kind, label)
+);
