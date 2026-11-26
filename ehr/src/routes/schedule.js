@@ -17,6 +17,7 @@ const router = express.Router();
 
 const { apptColors, colorFor } = require("../appt-colors");
 const O = require("../options");
+const { getList } = require("../lists");
 const TYPES = ["intake", "therapy", "psychiatry_eval", "med_management", "family", "group", "consult"];
 const MODALITIES = ["in_person", "telehealth"];
 const STATUSES = ["scheduled", "checked_in", "completed", "no_show", "cancelled", "late_cancel"];
@@ -118,7 +119,7 @@ function parseForm(db, body, existing = null) {
     duration: str(body.duration, 4),
     type: str(body.type, 40),
     modality: str(body.modality, 40) || "in_person",
-    location: str(body.location, 200),
+    location: str(O.readChoice(body, "location", { other: true, max: 200 }) ?? "", 200),
     telehealth_url: str(body.telehealth_url, 500),
     notes: str(body.notes, 2000),
     repeat_weeks: str(body.repeat_weeks, 3) || "1",
@@ -166,6 +167,12 @@ function fieldError(errors, k) {
 }
 function described(errors, k) {
   return errors[k] ? raw(`aria-invalid="true" aria-describedby="${k}-error"`) : "";
+}
+
+const OFF_SITE = ["Telehealth (client's home)", "Telehealth (other location)", "Client's home", "School", "Community / field"];
+/** Location dropdown: the clinic's rooms (Administration → Clinic lists) plus common off-site places; "Other" for anything else. */
+function locationList(db) {
+  return [["Rooms", getList(db, "room")], ["Off site", OFF_SITE]].filter(([, items]) => items.length);
 }
 
 function apptForm(req, { v, errors = {}, conflicts = [], action, existing = null, cancelHref }) {
@@ -227,7 +234,7 @@ function apptForm(req, { v, errors = {}, conflicts = [], action, existing = null
           ${fieldError(errors, "modality")}
         </label>
         <label for="location">Location <span class="hint">e.g. Office 2</span>
-          <input type="text" name="location" id="location" value="${v.location}" maxlength="200">
+          ${O.choice({ name: "location", list: locationList(req.db), value: v.location, other: true, placeholder: "Choose a location…" })}
         </label>
         <label for="telehealth_url">Telehealth link <span class="hint">https:// only</span>
           <input type="url" name="telehealth_url" id="telehealth_url" value="${v.telehealth_url}" maxlength="500" placeholder="https://" ${described(errors, "telehealth_url")}>

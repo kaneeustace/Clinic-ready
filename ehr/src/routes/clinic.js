@@ -6,6 +6,8 @@
  *   POST /admin/clinic               save details
  *   POST /admin/clinic/logo          upload logo (image_data = PNG/JPEG/WebP data URL from ehr.js; resized in the browser)
  *   POST /admin/clinic/logo/delete   remove logo
+ *   GET  /admin/lists                Clinic lists: rooms, programs and therapy groups (admin)
+ *   POST /admin/lists                add / rename / move / remove a list item
  *   GET  /brand/logo                 the logo image (public: shown on the sign-in page; not PHI). Mounted in app.js.
  */
 const express = require("express");
@@ -242,6 +244,109 @@ router.post("/admin/appointment-colors", adminOnly, (req, res) => {
   audit(req, "update", "appointment_colors", null, null, changed.join(","));
   req.flash("success", "Appointment colors saved.");
   res.redirect("/ehr/admin/appointment-colors");
+});
+
+/* ---------------- Clinic lists (rooms, programs, groups) ---------------- */
+const { KINDS, getList } = require("../lists");
+const LIST_ACTIONS = ["add", "rename", "up", "down", "remove"];
+
+function listRows(db, kind) {
+  getList(db, kind); // seeds defaults the first time
+  return db.prepare("SELECT id, label, sort FROM clinic_lists WHERE kind = ? AND active = 1 ORDER BY sort, label").all(kind);
+}
+
+router.get("/admin/lists", adminOnly, (req, res) => {
+  res.send(page(req, {
+    title: "Clinic lists",
+    active: "admin",
+    body: html`
+      <div class="page-head"><div><h1>Clinic lists</h1><p>The rooms, programs and therapy groups offered in dropdowns across the EHR (schedule, level of care, group notes). Every dropdown also has an "Other" choice.</p></div>
+        <a class="btn btn--sm" href="/ehr/admin">Back to administration</a></div>
+      ${Object.entries(KINDS).map(([kind, title]) => {
+        const rows = listRows(req.db, kind);
+        return html`
+        <section class="card stack" id="list-${kind}" aria-labelledby="h-${kind}">
+          <h2 id="h-${kind}">${title}</h2>
+          ${rows.length ? html`<ul class="list-plain stack">${rows.map((r, i) => html`
+            <li class="row">
+              <form method="post" action="/ehr/admin/lists" class="row">
+                ${csrfField(req)}<input type="hidden" name="id" value="${r.id}"><input type="hidden" name="action" value="rename">
+                <label class="visually-hidden" for="l-${r.id}">Name</label>
+                <input type="text" id="l-${r.id}" name="label" value="${r.label}" maxlength="80" required>
+                <button class="btn btn--sm" type="submit">Rename</button>
+              </form>
+              <form method="post" action="/ehr/admin/lists" class="row">
+                ${csrfField(req)}<input type="hidden" name="id" value="${r.id}">
+                <button class="btn btn--sm btn--ghost" type="submit" name="action" value="up" ${i === 0 ? raw("disabled") : ""} aria-label="Move ${r.label} up">Move up</button>
+                <button class="btn btn--sm btn--ghost" type="submit" name="action" value="down" ${i === rows.length - 1 ? raw("disabled") : ""} aria-label="Move ${r.label} down">Move down</button>
+                <button class="btn btn--sm btn--ghost" type="submit" name="action" value="remove" data-confirm="Remove ${r.label} from the list? Records that already use it keep it." aria-label="Remove ${r.label}">Remove</button>
+              </form>
+            </li>`)}</ul>` : html`<p class="muted">No items yet.</p>`}
+          <form method="post" action="/ehr/admin/lists" class="row">
+            ${csrfField(req)}<input type="hidden" name="kind" value="${kind}"><input type="hidden" name="action" value="add">
+            <label for="add-${kind}">Add item <input type="text" id="add-${kind}" name="label" maxlength="80" required></label>
+            <button class="btn btn--primary btn--sm" type="submit">Add</button>
+          </form>
+        </section>`;
+      })}`,
+  }));
+});
+
+router.post("/admin/lists", adminOnly, (req, res) => {
+  const b = req.body || {};
+  const action = String(b.action || "");
+  const back = (kind) => res.redirect(`/ehr/admin/lists${kind ? `#list-${kind}` : ""}`);
+  const fail = (msg, kind) => { req.flash("error", msg); back(kind); };
+  if (!LIST_ACTIONS.includes(action)) return fail("Unknown action.");
+  const db = req.db;
+  const label = String(b.label ?? "").trim().replace(/\s+/g, " ");
+  const checkLabel = (kind, exceptId = 0) => {
+    if (label.length < 1 || label.length > 80) return "Names must be 1 to 80 characters.";
+    const dup = db.prepare("SELECT id, active FROM clinic_lists WHERE kind = ? AND label = ? COLLATE NOCASE AND id != ?").get(kind, label, exceptId);
+    if (dup && dup.active) return `"${label}" is already on the list.`;
+    return dup ? { revive: dup.id } : null;
+  };
+
+  if (action === "add") {
+    const kind = String(b.kind || "");
+    if (!KINDS[kind]) return fail("Unknown list.");
+    getList(db, kind);
+    const err = checkLabel(kind);
+    if (typeof err === "string") return fail(err, kind);
+    const next = (db.prepare("SELECT MAX(sort) AS m FROM clinic_lists WHERE kind = ? AND active = 1").get(kind).m ?? -1) + 1;
+    let id;
+    if (err && err.revive) { db.prepare("UPDATE clinic_lists SET active = 1, label = ?, sort = ? WHERE id = ?").run(label, next, err.revive); id = err.revive; }
+    else id = Number(db.prepare("INSERT INTO clinic_lists (kind, label, sort) VALUES (?, ?, ?)").run(kind, label, next).lastInsertRowid);
+    audit(req, "update", "clinic_lists", id, null, kind);
+    req.flash("success", `Added "${label}".`);
+    return back(kind);
+  }
+
+  const row = /^\d+$/.test(String(b.id || "")) ? db.prepare("SELECT * FROM clinic_lists WHERE id = ? AND active = 1").get(Number(b.id)) : null;
+  if (!row) return fail("That item was not found.");
+  const kind = row.kind;
+
+  if (action === "rename") {
+    const err = checkLabel(kind, row.id);
+    if (typeof err === "string") return fail(err, kind);
+    if (err && err.revive) db.prepare("DELETE FROM clinic_lists WHERE id = ?").run(err.revive); // a removed item with this name; free the name
+    db.prepare("UPDATE clinic_lists SET label = ? WHERE id = ?").run(label, row.id);
+    req.flash("success", `Renamed to "${label}".`);
+  } else if (action === "remove") {
+    db.prepare("UPDATE clinic_lists SET active = 0 WHERE id = ?").run(row.id);
+    req.flash("success", `Removed "${row.label}". Records that already use it keep it.`);
+  } else {
+    const rows = listRows(db, kind);
+    const i = rows.findIndex((r) => r.id === row.id);
+    const j = action === "up" ? i - 1 : i + 1;
+    if (j >= 0 && j < rows.length) {
+      [rows[i], rows[j]] = [rows[j], rows[i]];
+      const up = db.prepare("UPDATE clinic_lists SET sort = ? WHERE id = ?");
+      rows.forEach((r, k) => up.run(k, r.id));
+    }
+  }
+  audit(req, "update", "clinic_lists", row.id, null, kind);
+  back(kind);
 });
 
 /** Public handlers mounted before sign-in (app.js): the logo and the home-screen app manifest. */
