@@ -41,7 +41,7 @@ const { INSTRUMENTS, isDate, str, intId, errorList } = require("./clinical");
 const { ICD10_COMMON } = require("./patients");
 const { isAhcccs } = require("../payers");
 const {
-  html, raw, page, chartPage, notFound, csrfField, select, getPatient, patientName,
+  html, raw, esc, page, chartPage, notFound, csrfField, select, getPatient, patientName,
   today, addDays, fmtDate, fmtTimestamp, age, humanize,
 } = require("../views");
 
@@ -84,9 +84,39 @@ const INTERVENTION_KINDS = [
   { value: "natural_support", label: "Natural support" },
 ];
 const KIND_LABEL = Object.fromEntries(INTERVENTION_KINDS.map((k) => [k.value, k.label]));
-const MODALITIES = ["CBT", "Behavioral activation", "Cognitive processing therapy (CPT)", "Prolonged exposure", "Exposure and response prevention",
-  "DBT skills", "ACT", "Motivational interviewing", "Relapse prevention", "Medication management", "MOUD", "Peer support",
-  "Family therapy", "Group therapy", "Case management", "Psychoeducation", "Mindfulness", "Sleep hygiene / CBT-I", "Safety planning"];
+// Treatment modalities offered in the intervention dropdown, grouped. "Other" lets the clinician type one in.
+const MODALITY_GROUPS = [
+  ["Cognitive and behavioral", ["CBT", "Behavioral activation", "Cognitive processing therapy (CPT)", "Prolonged exposure (PE)", "Exposure and response prevention (ERP)",
+    "Trauma-focused CBT (TF-CBT)", "CBT for insomnia (CBT-I)", "Problem-solving therapy"]],
+  ["Skills and mindfulness", ["DBT", "DBT skills group", "ACT", "Mindfulness-based therapy (MBCT / MBSR)", "Seeking Safety", "Social skills training"]],
+  ["Trauma", ["EMDR", "Narrative exposure therapy", "Trauma-informed care"]],
+  ["Substance use", ["Motivational interviewing (MI)", "Motivational enhancement therapy (MET)", "Relapse prevention", "Contingency management",
+    "Community reinforcement (CRA / CRAFT)", "Matrix Model", "12-step facilitation", "MOUD / MAT"]],
+  ["Family and relationships", ["Family therapy", "Couples therapy", "Parent-child interaction therapy (PCIT)", "Parent training", "Interpersonal therapy (IPT)"]],
+  ["Other therapies", ["Group therapy", "Solution-focused brief therapy", "Psychodynamic therapy", "Person-centered / supportive therapy", "Play therapy", "Psychoeducation"]],
+  ["Medical", ["Psychiatric evaluation", "Medication management", "Nursing / health monitoring"]],
+  ["Support services", ["Case management", "Care coordination", "Peer support", "Life skills training", "Supported employment (IPS)", "Housing support",
+    "Crisis intervention", "Safety planning", "Sleep hygiene"]],
+];
+const MODALITIES = MODALITY_GROUPS.flatMap(([, list]) => list);
+// Older plans used these spellings; still treated as listed values.
+const MODALITY_ALIASES = { "Prolonged exposure": "Prolonged exposure (PE)", "Exposure and response prevention": "Exposure and response prevention (ERP)",
+  "Motivational interviewing": "Motivational interviewing (MI)", MOUD: "MOUD / MAT", "Mindfulness": "Mindfulness-based therapy (MBCT / MBSR)",
+  "Sleep hygiene / CBT-I": "CBT for insomnia (CBT-I)" };
+
+/** The modality dropdown (grouped), with "Other" and a text box for anything not listed. */
+function modalitySelect(current) {
+  const cur = current ? MODALITY_ALIASES[current] || current : "";
+  const listed = !cur || MODALITIES.includes(cur);
+  const opt = (v, label, sel) => `<option value="${esc(v)}"${sel ? " selected" : ""}>${esc(label)}</option>`;
+  return raw(`<select id="modality" name="modality">${opt("", "Choose a modality…", !cur)}${MODALITY_GROUPS.map(([g, list]) =>
+    `<optgroup label="${esc(g)}">${list.map((m) => opt(m, m, m === cur)).join("")}</optgroup>`).join("")}${opt("__other", "Other (type it below)", !listed)}</select>`);
+}
+function readModality(b) {
+  const m = str(b.modality, 100);
+  if (m === "__other") return str(b.modality_other, 100) || null;
+  return m || str(b.modality_other, 100) || null;
+}
 // ASAM Criteria 4th edition dimension names (verify against the licensed ASAM text).
 const ASAM_DIMS = {
   1: "Intoxication, Withdrawal & Addiction Medications",
@@ -1369,8 +1399,8 @@ const LEVELS = {
     form(ctx, v) {
       return html`<div class="form-grid">
         <label for="kind">Kind ${select("kind", INTERVENTION_KINDS, v.kind || "professional")}</label>
-        <label for="modality">Modality / evidence-based practice <input id="modality" name="modality" list="modalities" value="${v.modality || ""}" maxlength="100">
-          <datalist id="modalities">${MODALITIES.map((m) => html`<option value="${m}"></option>`)}</datalist></label>
+        <label for="modality">Modality / evidence-based practice ${modalitySelect(v.modality)}</label>
+        <label for="modality_other">If other, which modality? <input id="modality_other" name="modality_other" value="${v.modality && !MODALITIES.includes(MODALITY_ALIASES[v.modality] || v.modality) ? v.modality : ""}" maxlength="100" placeholder="e.g. Somatic experiencing"></label>
         <label class="span-all" for="description">Specific technique or action, and its purpose ${ta("description", v.description, 2, 'required maxlength="2000"')}
           <span class="hint">e.g. "Activity scheduling and monitoring to rebuild routine and increase positive reinforcement."</span></label>
         <label for="frequency">Frequency <input id="frequency" name="frequency" value="${v.frequency || ""}" maxlength="100" placeholder="e.g. Weekly, 53 min"></label>
@@ -1382,7 +1412,7 @@ const LEVELS = {
     },
     validate(ctx, b) {
       const v = {
-        kind: str(b.kind, 20) || "professional", modality: str(b.modality, 100) || null, description: str(b.description, 2000),
+        kind: str(b.kind, 20) || "professional", modality: readModality(b), description: str(b.description, 2000),
         frequency: str(b.frequency, 100) || null, duration: str(b.duration, 100) || null,
         responsible_user_id: str(b.responsible_user_id, 12) || null, responsible_text: str(b.responsible_text, 200) || null,
       };

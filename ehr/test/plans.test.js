@@ -192,6 +192,14 @@ test("tree CRUD with validation, soft warnings, reorder and cascade delete", asy
   assert.equal((await iv({ kind: "bogus", responsible_text: "Client" })).status, 400);
   assert.equal((await iv({ description: "", responsible_text: "Client" })).status, 400);
   assert.equal((await iv({ kind: "self_directed", responsible_text: "Client" })).status, 302);
+  // Modality dropdown: listed choice, "Other" with typed text, and the grouped <select> on the page
+  assert.equal((await iv({ responsible_text: "Client", modality: "Seeking Safety" })).status, 302);
+  assert.equal(last("plan_interventions").modality, "Seeking Safety");
+  assert.equal((await iv({ responsible_text: "Client", modality: "__other", modality_other: "Somatic experiencing" })).status, 302);
+  assert.equal(last("plan_interventions").modality, "Somatic experiencing");
+  const withForm = await c.get(`/ehr/treatment-plans/${id}/interventions/new?parent=${vague.id}`);
+  assert.match(withForm.text, /<select id="modality" name="modality">/);
+  assert.match(withForm.text, /<optgroup label="Substance use">/);
   // edit objective
   r = await c.post(`/ehr/treatment-plans/${id}/objectives/${vague.id}`, objective({ text: "Do 2 grounding exercises per day.", baseline_value: 0, target_value: 2 }));
   assert.equal(r.status, 302);
