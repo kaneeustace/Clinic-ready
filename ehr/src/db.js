@@ -52,6 +52,7 @@ function migrate(db, schema) {
       ["quick", "INTEGER NOT NULL DEFAULT 0"],              // returning client: one-tap check-in (routes/checkin.js)
       ["link_sent_at", "TEXT"],                              // when the check-in link was emailed/texted automatically
       ["link_sent_via", "TEXT"],
+      ["insurance_relation", "TEXT"],                        // client's relationship to the policyholder (options.SUBSCRIBER_RELATIONSHIPS)
     ],
     // HIPAA hardening (see docs/hipaa/)
     users: [

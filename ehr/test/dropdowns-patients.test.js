@@ -180,6 +180,10 @@ test("check-in: insurance company dropdown, required; listed and Other values sa
   const base2 = await checkinLink(pid2);
   const c2 = t.client();
   await c2.post(`${base2}/contact`, { same: "1" });
-  assert.equal((await c2.post(`${base2}/insurance`, { changed: "1", payer: "Aetna", payer_other: "", image_data: "" })).status, 303);
-  assert.equal(t.db.prepare("SELECT insurance_payer FROM checkins WHERE patient_id = ?").get(pid2).insurance_payer, "Aetna");
+  assert.match((await c2.get(base2)).text, /name="relation"/);
+  assert.equal((await c2.post(`${base2}/insurance`, { changed: "1", payer: "Aetna", payer_other: "", relation: "bogus", image_data: "" })).status, 400);
+  assert.equal((await c2.post(`${base2}/insurance`, { changed: "1", payer: "Aetna", payer_other: "", relation: "spouse", image_data: "" })).status, 303);
+  const row = t.db.prepare("SELECT insurance_payer, insurance_relation FROM checkins WHERE patient_id = ?").get(pid2);
+  assert.equal(row.insurance_payer, "Aetna");
+  assert.equal(row.insurance_relation, "spouse");
 });

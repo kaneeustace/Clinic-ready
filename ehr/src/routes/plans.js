@@ -136,6 +136,44 @@ function readFrequency(b) {
   const len = O.readChoice(b, "session_length", { list: O.SESSION_LENGTHS, other: true, max: 100 });
   return [freq, len].filter(Boolean).join(", ").slice(0, 100) || null;
 }
+/**
+ * Objective "how it's measured" is stored as one string ("Client log / diary, weekly") but entered as a method dropdown
+ * and a how-often dropdown. A saved value is split back only when both parts are listed; otherwise the old text goes
+ * to the method's "Other" box so nothing is lost.
+ */
+const measureFreq = (s) => O.MEASURE_FREQUENCIES.find((f) => f.toLowerCase() === String(s).trim().toLowerCase()) || null;
+function splitMeasurement(saved) {
+  const v = saved == null ? "" : String(saved);
+  if (!v || O.inList(O.MEASURE_METHODS, v)) return { method: v, often: "" };
+  if (measureFreq(v)) return { method: "", often: measureFreq(v) };
+  const i = v.lastIndexOf(", ");
+  if (i > 0 && O.inList(O.MEASURE_METHODS, v.slice(0, i)) && measureFreq(v.slice(i + 2))) return { method: v.slice(0, i), often: measureFreq(v.slice(i + 2)) };
+  return { method: v, often: "" };
+}
+function readMeasurement(b) {
+  const method = O.readChoice(b, "measurement_method", { list: O.MEASURE_METHODS, other: true, max: 500 });
+  const often = O.readChoice(b, "measurement_frequency", { list: O.MEASURE_FREQUENCIES, max: 50 });
+  if (often === undefined) return { value: method, error: "Choose a valid measurement frequency." };
+  return { value: (method && often ? `${method}, ${often.toLowerCase()}` : method || often || "").slice(0, 500) || null };
+}
+/** A "; "-joined list of people entered as checkboxes (listed names) plus one free-text box (names / anyone else). */
+function splitPeople(saved, list) {
+  const parts = String(saved ?? "").split(/\s*;\s*/).map((s) => s.trim()).filter(Boolean);
+  return { picked: parts.filter((p) => list.includes(p)), rest: parts.filter((p) => !list.includes(p)).join("; ") };
+}
+function readPeople(b, checkName, textName, list, max) {
+  const picks = [].concat(b[checkName] ?? []).map((x) => String(x).trim()).filter((x, i, a) => list.includes(x) && a.indexOf(x) === i);
+  return [...picks, str(b[textName], max)].filter(Boolean).join("; ").slice(0, max) || null;
+}
+const peopleChecks = (name, list, picked) => html`<span class="row" role="group">${list.map((p) => html`<label class="check"><input type="checkbox" name="${name}" value="${p}" ${checked(picked.includes(p))}> ${p}</label>`)}</span>`;
+/** "Review every" dropdown; Other is a number of days. */
+const reviewDaysChoice = (value) => O.choice({ name: "review_interval_days", list: O.REVIEW_DAYS, value: value ?? "", other: true, required: true,
+  placeholder: "Choose an interval…", otherLabel: "Other (number of days)", otherPlaceholder: "Number of days, 7-365" });
+const readReviewDays = (b) => str(O.readChoice(b, "review_interval_days", { list: O.REVIEW_DAYS, other: true, max: 10 }), 10);
+const DECLINED_LIST = O.SIGNATURE_DECLINED.filter((x) => x !== "Other");
+const declinedChoice = (id, value) => O.choice({ name: "declined_reason", id, list: DECLINED_LIST, value: value ?? "", other: true,
+  placeholder: "Choose a reason…", otherPlaceholder: "Describe the reason" });
+const DX_CHANGE = [{ value: "none", label: "No changes" }, { value: "changes", label: "Changes (describe below)" }];
 // ASAM Criteria 4th edition dimension names (verify against the licensed ASAM text).
 const ASAM_DIMS = {
   1: "Intoxication, Withdrawal & Addiction Medications",
@@ -986,8 +1024,7 @@ function newPlanPage(req, patient, { values, errors = [], active }) {
       <div class="form-grid">
         <label for="plan_type">Plan type ${select("plan_type", PLAN_TYPES, values.plan_type)}
           <span class="hint">SUD and co-occurring plans add ASAM level-of-care, MOUD, drug-testing and relapse-prevention sections.</span></label>
-        <label for="review_interval_days">Review every (days)
-          <input type="number" id="review_interval_days" name="review_interval_days" min="7" max="365" value="${values.review_interval_days}" required>
+        <label for="review_interval_days">Review every ${reviewDaysChoice(values.review_interval_days)}
           <span class="hint">${isAhcccs(req.db, patient.id) ? "AHCCCS default 365 (the plan must be no more than 1 year old on the date of service); a shorter interval is allowed. Update after significant life events." : "Default 90. Some programs require 30 (e.g. state SUD rules)."} Ignored when copying the active plan.</span></label>
       </div>
       <div><h3>Diagnoses to snapshot</h3>
@@ -1027,7 +1064,7 @@ router.post("/patients/:id/treatment-plan", WRITE, (req, res) => {
   const active = activePlanFor(db, patient.id);
   const copy = !!active && req.body.copy_from_active !== "0";
   const defIv = isAhcccs(db, patient.id) ? String(AHCCCS_MAX_AGE_DAYS) : "90";
-  const values = { plan_type: str(req.body.plan_type, 20) || "mental_health", review_interval_days: str(req.body.review_interval_days, 4) || defIv, copy_from_active: copy ? "1" : "0" };
+  const values = { plan_type: str(req.body.plan_type, 20) || "mental_health", review_interval_days: readReviewDays(req.body) || defIv, copy_from_active: copy ? "1" : "0" };
   const errors = [];
   if (!PLAN_TYPES.some((p) => p.value === values.plan_type)) errors.push("Choose a valid plan type.");
   const iv = /^\d+$/.test(values.review_interval_days) ? Number(values.review_interval_days) : NaN;
@@ -1083,6 +1120,8 @@ function headerForm(req, found, { values, errors = [] }) {
     ? html`<label class="span-all" for="${k}">${label} ${ta(k, values[k], rows)}</label>`
     : k === "estimated_duration"
     ? html`<label for="${k}">${label} ${O.choice({ name: k, list: O.DURATIONS, value: values[k], other: true, placeholder: "Choose a duration…", otherPlaceholder: "e.g. 16-20 sessions over 6 months" })}</label>`
+    : k === "level_of_care"
+    ? html`<label for="${k}">${label} ${O.choice({ name: k, list: O.PROGRAM_LEVELS, value: values[k], other: true, placeholder: "Choose a level / program…", otherPlaceholder: "e.g. Drug court program" })}</label>`
     : html`<label for="${k}">${label} <input id="${k}" name="${k}" value="${values[k] || ""}" maxlength="200"></label>`;
   const lvlOpts = [{ value: "", label: "Not set" }, ...ASAM_LEVELS.map(([k]) => ({ value: k, label: ASAM_LEVEL_LABEL[k] }))];
   return chartPage(req, patient, "plan", html`
@@ -1095,7 +1134,7 @@ function headerForm(req, found, { values, errors = [] }) {
         <label for="plan_type">Plan type ${select("plan_type", PLAN_TYPES, values.plan_type)}</label>
         <label for="start_date">Start date <input type="date" id="start_date" name="start_date" value="${values.start_date || ""}">
           <span class="hint">Optional. Defaults to the activation date.</span></label>
-        <label for="review_interval_days">Review every (days) <input type="number" id="review_interval_days" name="review_interval_days" min="7" max="365" value="${values.review_interval_days}" required>
+        <label for="review_interval_days">Review every ${reviewDaysChoice(values.review_interval_days)}
           <span class="hint">Next review = activation date + interval.</span></label>
         <label for="safety_plan_note_id">Crisis safety plan
           ${select("safety_plan_note_id", [{ value: "", label: notes.length ? "None linked" : "No safety plan notes on file" },
@@ -1128,11 +1167,12 @@ function validateHeader(db, plan, body) {
   const v = {}, errors = [];
   for (const [k, , rows] of TEXT_FIELDS) v[k] = str(body[k], rows ? 5000 : 200) || null;
   v.estimated_duration = O.readChoice(body, "estimated_duration", { list: O.DURATIONS, other: true, max: 200 });
+  v.level_of_care = O.readChoice(body, "level_of_care", { list: O.PROGRAM_LEVELS, other: true, max: 200 });
   v.plan_type = str(body.plan_type, 20);
   if (!PLAN_TYPES.some((p) => p.value === v.plan_type)) errors.push("Choose a valid plan type.");
   v.start_date = str(body.start_date, 10) || null;
   if (v.start_date && !isDate(v.start_date)) errors.push("Start date must be a valid date.");
-  const iv = str(body.review_interval_days, 4);
+  const iv = readReviewDays(body);
   v.review_interval_days = /^\d+$/.test(iv) ? Number(iv) : NaN;
   if (!(v.review_interval_days >= 7 && v.review_interval_days <= 365)) { errors.push("Review interval must be a whole number of days between 7 and 365."); v.review_interval_days = iv; }
   for (const k of ["loc_indicated", "loc_adjusted"]) {
@@ -1342,6 +1382,7 @@ const LEVELS = {
       const instOpts = [{ value: "", label: "Not instrument-based" }, ...TRACKABLE.map((d) => ({
         value: d.key, label: `${d.name} (${d.construct}, 0–${d.max})${latest[d.key] ? ` · latest ${latest[d.key].total_score} on ${fmtDate(latest[d.key].administered_on)}` : ""}` }))];
       const quick = TRACKABLE.filter((d) => latest[d.key]);
+      const meas = splitMeasurement(v.measurement_method);
       return html`
         ${ctx.isNew && quick.length ? html`<div class="card card--muted"><p class="small"><strong>Start from a measure:</strong> pre-fills the instrument and baseline from the latest score.</p>
           <div class="row">${quick.map((d) => html`<a class="btn btn--sm" href="?parent=${ctx.parentId}&amp;instrument=${d.key}">${d.name}: ${latest[d.key].total_score}</a>`)}</div></div>` : ""}
@@ -1356,10 +1397,11 @@ const LEVELS = {
         <label for="baseline_value">Baseline <input id="baseline_value" name="baseline_value" inputmode="decimal" value="${v.baseline_value ?? ""}">
           <span class="hint">Left blank on an instrument objective, the latest score is used.</span></label>
         <label for="target_value">Target <input id="target_value" name="target_value" inputmode="decimal" value="${v.target_value ?? ""}"></label>
-        <label for="unit">Unit <input id="unit" name="unit" value="${v.unit || ""}" maxlength="60" placeholder="e.g. points, times per week"></label>
+        <label for="unit">Unit ${O.choice({ name: "unit", list: O.OBJECTIVE_UNITS, value: v.unit, other: true, placeholder: "Choose a unit…", otherPlaceholder: "e.g. drinks per week" })}</label>
         <label for="target_date">Target date <input type="date" id="target_date" name="target_date" value="${v.target_date || ""}" required></label>
         <label for="status">Status ${select("status", OBJ_STATUSES, v.status || "not_started")}</label>
-        <label class="span-all" for="measurement_method">How and how often it's measured <input id="measurement_method" name="measurement_method" value="${v.measurement_method || ""}" maxlength="500" placeholder="e.g. PHQ-9 every 2 weeks in session; self-report log reviewed weekly"></label>
+        <label for="measurement_method">How it's measured ${O.choice({ name: "measurement_method", list: O.MEASURE_METHODS, value: meas.method, other: true, placeholder: "Choose a method…", otherPlaceholder: "e.g. PHQ-9 in session; school report card" })}</label>
+        <label for="measurement_frequency">How often it's measured ${O.choice({ name: "measurement_frequency", list: O.MEASURE_FREQUENCIES, value: meas.often, placeholder: "Choose how often…" })}</label>
         <label class="span-all" for="linked_strength">Builds on strength (optional) <input id="linked_strength" name="linked_strength" value="${v.linked_strength || ""}" maxlength="500"></label>
       </div>`;
     },
@@ -1367,11 +1409,12 @@ const LEVELS = {
       const v = {
         text: str(b.text, 1000), measure_type: str(b.measure_type, 20) || "attainment", instrument: str(b.instrument, 10) || null,
         baseline_value: num(b.baseline_value), target_value: num(b.target_value), direction: str(b.direction, 10) || null,
-        unit: str(b.unit, 60) || null, measurement_method: str(b.measurement_method, 500) || null, target_date: str(b.target_date, 10) || null,
+        unit: O.readChoice(b, "unit", { list: O.OBJECTIVE_UNITS, other: true, max: 60 }), measurement_method: readMeasurement(b).value, target_date: str(b.target_date, 10) || null,
         linked_strength: str(b.linked_strength, 500) || null, status: str(b.status, 20) || "not_started",
       };
       const errors = [], warnings = [];
       if (!v.text) errors.push("Objective text is required.");
+      if (readMeasurement(b).error) errors.push(readMeasurement(b).error);
       if (!MEASURE_TYPES.some((m) => m.value === v.measure_type)) errors.push("Choose a valid measure type.");
       if (Number.isNaN(v.baseline_value)) { errors.push("Baseline must be a number."); }
       if (Number.isNaN(v.target_value)) { errors.push("Target must be a number."); }
@@ -1420,6 +1463,7 @@ const LEVELS = {
       JOIN plan_problems p ON p.id = g.problem_id WHERE i.id = ?`,
     form(ctx, v) {
       const freq = splitFrequency(v.frequency);
+      const resp = splitPeople(v.responsible_text, O.RESPONSIBLE_PEOPLE);
       return html`<div class="form-grid">
         <label for="kind">Kind ${select("kind", INTERVENTION_KINDS, v.kind || "professional")}</label>
         <label for="modality">Modality / evidence-based practice ${modalitySelect(v.modality)}</label>
@@ -1431,14 +1475,17 @@ const LEVELS = {
         <label for="duration">Duration ${O.choice({ name: "duration", list: O.DURATIONS, value: v.duration, other: true, placeholder: "Choose a duration…", otherPlaceholder: "e.g. 20 sessions" })}</label>
         <label for="responsible_user_id">Responsible staff member ${select("responsible_user_id", [{ value: "", label: "Not a staff member" },
           ...ctx.staff.map((s) => ({ value: s.id, label: `${s.name}${s.credentials ? `, ${s.credentials}` : ""}` }))], v.responsible_user_id)}</label>
-        <label for="responsible_text">…or responsible person (not staff) <input id="responsible_text" name="responsible_text" value="${v.responsible_text || ""}" maxlength="200" placeholder="e.g. Client; partner; peer mentor"></label>
+        <fieldset class="span-all"><legend>…or responsible person (not staff)</legend>
+          ${peopleChecks("responsible_people", O.RESPONSIBLE_PEOPLE, resp.picked)}
+          <label for="responsible_text">Other / names <input id="responsible_text" name="responsible_text" value="${resp.rest}" maxlength="200" placeholder="e.g. Aunt Maria; AA sponsor Joe"></label>
+        </fieldset>
       </div>`;
     },
     validate(ctx, b) {
       const v = {
         kind: str(b.kind, 20) || "professional", modality: readModality(b), description: str(b.description, 2000),
         frequency: readFrequency(b), duration: O.readChoice(b, "duration", { list: O.DURATIONS, other: true, max: 100 }),
-        responsible_user_id: str(b.responsible_user_id, 12) || null, responsible_text: str(b.responsible_text, 200) || null,
+        responsible_user_id: str(b.responsible_user_id, 12) || null, responsible_text: readPeople(b, "responsible_people", "responsible_text", O.RESPONSIBLE_PEOPLE, 200),
       };
       const errors = [], warnings = [];
       if (!INTERVENTION_KINDS.some((k) => k.value === v.kind)) errors.push("Choose a valid intervention kind.");
@@ -1690,7 +1737,7 @@ function signPage(req, found, { errors = [], values = {} } = {}) {
           <label>How the client signed ${select("method", CLIENT_METHODS, values.method || "in_person")}</label>
         </div>
         <label class="check"><input type="checkbox" name="declined" value="1" ${checked(values.declined)}> Client declined or was unable to sign</label>
-        <label for="client_reason">Reason (required if declined or unable) <input id="client_reason" name="declined_reason" value="${values.declined_reason || ""}" maxlength="500"></label>
+        <label for="client_reason">Reason (required if declined or unable) ${declinedChoice("client_reason", O.readChoice(values, "declined_reason", { other: true, max: 500 }))}</label>
         <label class="check"><input type="checkbox" name="copy_offered" value="1" ${checked(values.copy_offered !== "0")}> A copy of the plan was offered to the client</label>
         <div><button class="btn btn--primary" type="submit">Record client signature</button></div>
       </form></section>` : ""}
@@ -1703,7 +1750,7 @@ function signPage(req, found, { errors = [], values = {} } = {}) {
           <label>Method ${raw(String(select("method", CLIENT_METHODS, "in_person")).replace('id="method"', 'id="g_method"'))}</label>
         </div>
         <label class="check"><input type="checkbox" name="declined" value="1"> Guardian declined or was unavailable</label>
-        <label for="g_reason">Reason (if declined or unavailable) <input id="g_reason" name="declined_reason" maxlength="500"></label>
+        <label for="g_reason">Reason (if declined or unavailable) ${declinedChoice("g_reason", "")}</label>
         <div><button class="btn" type="submit">Record guardian signature</button></div>
       </form></section>` : ""}
 
@@ -1760,7 +1807,7 @@ router.post("/treatment-plans/:planId/signatures", WRITE, (req, res) => {
   } else if (!errors.length) {
     row.signer_name = str(req.body.signer_name, 200);
     row.declined = req.body.declined === "1" ? 1 : 0;
-    row.declined_reason = str(req.body.declined_reason, 500) || null;
+    row.declined_reason = O.readChoice(req.body, "declined_reason", { list: DECLINED_LIST, other: true, max: 500 });
     row.method = row.declined ? null : str(req.body.method, 20);
     row.copy_offered = role === "client" && req.body.copy_offered === "1" ? 1 : 0;
     if (!row.signer_name) errors.push(`Enter the ${role}'s name.`);
@@ -1886,6 +1933,8 @@ function reviewPage(req, found, { values = {}, errors = [] } = {}) {
   const { plan, patient } = found;
   const tree = loadTree(req.db, plan);
   const v = (k, d = "") => (values[k] !== undefined ? values[k] : d);
+  const posted = values.participants !== undefined || values.participant_list !== undefined;
+  const parts = splitPeople(posted ? readPeople(values, "participant_list", "participants", O.REVIEW_PARTICIPANTS, 300) : `Client; ${req.user.name}`, O.REVIEW_PARTICIPANTS);
   return chartPage(req, patient, "plan", html`
     <div class="page-head"><div><h1>Plan review <span class="muted">v${plan.version}</span></h1>
       <p>Next review was due ${fmtDate(plan.review_date)} · reviewing every ${plan.review_interval_days} days</p></div>
@@ -1895,7 +1944,10 @@ function reviewPage(req, found, { values = {}, errors = [] } = {}) {
       ${csrfField(req)}
       <section class="card"><h2>Review</h2><div class="form-grid">
         <label for="review_date">Review date <input type="date" id="review_date" name="review_date" value="${v("review_date", today())}" max="${today()}" required></label>
-        <label for="participants">Participants <input id="participants" name="participants" value="${v("participants", "Client; " + req.user.name)}" maxlength="300"></label>
+        <fieldset class="span-all"><legend>Participants</legend>
+          ${peopleChecks("participant_list", O.REVIEW_PARTICIPANTS, parts.picked)}
+          <label for="participants">Names / others <input id="participants" name="participants" value="${parts.rest}" maxlength="300" placeholder="e.g. clinician name; interpreter"></label>
+        </fieldset>
         <label class="span-all" for="client_perspective">Client's perspective on progress ${ta("client_perspective", v("client_perspective"), 2)}</label>
       </div></section>
       <section class="card"><h2>Objectives</h2>
@@ -1917,8 +1969,9 @@ function reviewPage(req, found, { values = {}, errors = [] } = {}) {
       </section>
       <section class="card stack"><h2>Summary and outcome</h2><div class="form-grid">
         <label class="span-all" for="summary">Summary of progress ${ta("summary", v("summary"), 3, "required")}</label>
-        <label class="span-all" for="diagnosis_changes">Diagnosis changes ${ta("diagnosis_changes", v("diagnosis_changes"), 2)}
-          <span class="hint">Record "None" if unchanged. Update the problem list on the Overview tab separately.</span></label>
+        <label for="diagnosis_change_status">Diagnosis changes ${O.choice({ name: "diagnosis_change_status", list: DX_CHANGE, value: v("diagnosis_change_status"), required: true, placeholder: "Choose…" })}</label>
+        <label class="span-all" for="diagnosis_changes">Describe the changes ${ta("diagnosis_changes", v("diagnosis_changes"), 2)}
+          <span class="hint">Required when diagnoses changed. Update the problem list on the Overview tab separately.</span></label>
       </div>
       <fieldset><legend>Is the current level of care still appropriate?</legend><div class="row">
         <label class="check"><input type="radio" name="level_of_care_appropriate" value="1" ${checked(v("level_of_care_appropriate") === "1")} required> Yes</label>
@@ -1956,7 +2009,7 @@ router.post("/treatment-plans/:planId/review", WRITE, (req, res) => {
   const tree = loadTree(db, plan);
   const errors = [];
   const r = {
-    review_date: str(b.review_date, 10), participants: str(b.participants, 300) || null, client_perspective: str(b.client_perspective, 5000) || null,
+    review_date: str(b.review_date, 10), participants: readPeople(b, "participant_list", "participants", O.REVIEW_PARTICIPANTS, 300), client_perspective: str(b.client_perspective, 5000) || null,
     summary: str(b.summary, 5000), diagnosis_changes: str(b.diagnosis_changes, 2000) || null,
     loc: b.level_of_care_appropriate === "1" ? 1 : b.level_of_care_appropriate === "0" ? 0 : null,
     outcome: str(b.outcome, 20), end_reason: str(b.end_reason, 20) || "goals_met",
@@ -1964,6 +2017,10 @@ router.post("/treatment-plans/:planId/review", WRITE, (req, res) => {
   if (!isDate(r.review_date)) errors.push("Review date must be a valid date.");
   else if (r.review_date > today()) errors.push("Review date can't be in the future.");
   if (!r.summary) errors.push("Summarize progress.");
+  const dxStatus = str(b.diagnosis_change_status, 10);
+  if (dxStatus === "none") r.diagnosis_changes = "None";
+  else if (dxStatus === "changes") { if (!r.diagnosis_changes) errors.push("Describe the diagnosis changes, or choose \"No changes\"."); }
+  else if (dxStatus) errors.push("Choose whether the diagnoses changed.");
   if (r.loc === null) errors.push("Say whether the level of care is still appropriate.");
   if (!OUTCOMES.some((o) => o.value === r.outcome)) errors.push("Choose an outcome: continue, revise or discharge.");
   if (r.outcome === "discharge" && !END_REASONS.some((e) => e.value === r.end_reason && e.value !== "other")) errors.push("Choose a discharge reason.");

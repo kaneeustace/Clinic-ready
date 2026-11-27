@@ -263,6 +263,7 @@ function stepPage(req, res, c, { error = null, crisis = false } = {}, status = 2
           <input type="hidden" name="changed" value="1"><input type="hidden" name="image_data" value="">
           <label>Insurance company ${O.choice({ name: "payer", list: O.PAYERS, other: true, required: true, placeholder: "Choose your insurance…", otherPlaceholder: "If not listed, type the name" })}</label>
           <label>Member ID <input name="member_id" maxlength="60" autocomplete="off"></label>
+          <label>Your relationship to the policyholder ${O.choice({ name: "relation", list: O.SUBSCRIBER_RELATIONSHIPS, value: "self", placeholder: "Not sure" })}</label>
           <label>Photo of the <strong>front</strong> of your card <input type="file" accept="image/*" capture="environment" data-photo-file></label>
           <img class="photo-preview" alt="Preview of your card" hidden data-photo-preview>
           <p class="hint" data-photo-status role="status"></p>
@@ -372,7 +373,9 @@ publicRouter.post("/s/:token/:step", (req, res) => {
     const img = saveCard(req, c, "insurance_front", b.image_data);
     if (img && img.error) return stepPage(req, res, c, { error: img.error }, 400);
     audit(sysReq(req), "checkin_insurance", "appointment", c.appointment_id, c.patient_id, img ? "changed + card front" : "changed");
-    return advance(", insurance_changed = 1, insurance_payer = ?, insurance_member_id = ?", [payer, String(b.member_id || "").trim().slice(0, 60) || null], { override: { insurance_changed: 1 } });
+    const relation = O.readChoice(b, "relation", { list: O.SUBSCRIBER_RELATIONSHIPS });
+    if (relation === undefined) return stepPage(req, res, c, { error: "Choose your relationship to the policyholder from the list." }, 400);
+    return advance(", insurance_changed = 1, insurance_payer = ?, insurance_member_id = ?, insurance_relation = ?", [payer, String(b.member_id || "").trim().slice(0, 60) || null, relation], { override: { insurance_changed: 1 } });
   }
   if (step === "card-back") {
     if (b.skip !== "1") {
@@ -689,7 +692,7 @@ router.get("/checkins/:id", requirePerm("schedule:read"), (req, res) => {
           : html`<p class="muted">Client confirmed their contact information is correct.</p>`}
       </section>
       <section class="card"><h2>Insurance</h2>
-        ${c.insurance_changed ? html`<p><strong>New insurance:</strong> ${c.insurance_payer}${c.insurance_member_id ? ` · Member ID ${c.insurance_member_id}` : ""}</p>
+        ${c.insurance_changed ? html`<p><strong>New insurance:</strong> ${c.insurance_payer}${c.insurance_member_id ? ` · Member ID ${c.insurance_member_id}` : ""}${c.insurance_relation ? ` · Relationship to policyholder: ${O.labelFor(O.SUBSCRIBER_RELATIONSHIPS, c.insurance_relation).replace(/^\S+ · /, "")}` : ""}</p>
           ${cards.length ? html`<div class="row">${cards.map((img) => html`<a href="/ehr/patients/${c.patient_id}/photos/${img.id}" target="_blank" rel="noopener"><img class="ci-card-thumb" src="/ehr/patients/${c.patient_id}/photos/${img.id}" alt="${humanize(img.category)}"></a>`)}</div>` : html`<p class="muted">No card photos.</p>`}
           <p class="hint">Verify eligibility, then update the policy on the chart's Overview (Insurance).</p>`
           : c.insurance_changed === 0 ? html`<p class="muted">No change.</p>` : html`<p class="muted">Not answered.</p>`}

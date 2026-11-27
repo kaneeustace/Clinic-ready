@@ -233,7 +233,7 @@ test("AHCCCS service plans default to a 365-day review interval", async () => {
   const fresh = newPatient("PlanDefault", "1990-01-01", "D10000001");
   const form = await c.get(`/ehr/patients/${fresh}/treatment-plan/new`);
   assert.equal(form.status, 200);
-  assert.match(form.text, /name="review_interval_days" min="7" max="365" value="365"/);
+  assert.match(form.text, /<select[^>]*name="review_interval_days"[\s\S]*?<option value="365" selected>/);
   const r = await c.post(`/ehr/patients/${fresh}/treatment-plan`, { plan_type: "mental_health" });
   assert.equal(r.status, 302);
   assert.equal(t.db.prepare("SELECT review_interval_days FROM treatment_plans WHERE patient_id = ?").get(fresh).review_interval_days, 365);
